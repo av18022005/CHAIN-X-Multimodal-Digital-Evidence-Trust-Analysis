@@ -1,0 +1,2 @@
+# CHAIN-X-Multimodal-Digital-Evidence-Trust-Analysis
+CHAIN-X is a multimodal digital forensic framework that analyzes images, videos, reports, metadata, and chain-of-custody records together to assess evidence trustworthiness.  It detects cross-modal inconsistencies and custody anomalies, generates Evidence Health Index (EHI) and Custody Risk Score (CRS) to show why evidence may be considered risky.
