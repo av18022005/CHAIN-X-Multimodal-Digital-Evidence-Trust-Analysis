@@ -1,0 +1,25 @@
+seed: 42
+
+paths:
+  master_csv: "data/master_index.csv"
+  images_root: "data/images"
+  external_root: "data/external/coverage"
+  features_dir: "features"
+  models_dir: "models"
+  experiments_log: "experiments/experiment_log.csv"
+
+image:
+  target_size: [224, 224]
+  ela_quality: 90
+  batch_size: 100          # checkpoint every N images
+  backbone: "efficientnet_b0"
+  embedding_dim: 1280
+
+nlp:
+  backbone: "microsoft/deberta-v3-small"
+  max_length: 256
+
+split:
+  train: 0.7
+  val: 0.15
+  test: 0.15

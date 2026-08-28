@@ -1,0 +1,14 @@
+# data & large artifacts never go to GitHub
+data/images/
+data/external/
+data/nlp/
+data/provenance/
+features/*.npy
+features/checkpoints/
+models/*.pkl
+models/*.pt
+*.ipynb_checkpoints
+.venv/
+__pycache__/
+*.pyc
+.DS_Store
