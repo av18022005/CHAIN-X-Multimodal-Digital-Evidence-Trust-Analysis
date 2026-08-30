@@ -37,13 +37,13 @@ def compute_ela(path: str, quality: int = 90) -> np.ndarray:
     return cv2.cvtColor(diff, cv2.COLOR_RGB2GRAY)
 
 
-def ela_summary_features(ela_map: np.ndarray) -> dict:
+def ela_summary_features(ela_map: np.ndarray, prefix: str = "ela") -> dict:
     return {
-        "ela_mean": float(np.mean(ela_map)),
-        "ela_std": float(np.std(ela_map)),
-        "ela_max": float(np.max(ela_map)),
-        "ela_p95": float(np.percentile(ela_map, 95)),
-        "ela_high_energy_ratio": float(np.mean(ela_map > 30)),  # fraction of "hot" pixels
+        f"{prefix}_mean": float(np.mean(ela_map)),
+        f"{prefix}_std": float(np.std(ela_map)),
+        f"{prefix}_max": float(np.max(ela_map)),
+        f"{prefix}_p95": float(np.percentile(ela_map, 95)),
+        f"{prefix}_high_energy_ratio": float(np.mean(ela_map > 30)),  # fraction of "hot" pixels
     }
 
 
@@ -73,13 +73,28 @@ def edge_features(gray: np.ndarray) -> dict:
     }
 
 
-def extract_all_features(path: str, quality: int = 90) -> dict:
-    ela_map = compute_ela(path, quality=quality)
+def extract_all_features(path: str, qualities=(70, 90, 95)) -> dict:
+    """Multi-quality ELA: tampered regions often respond differently across
+    recompression qualities than authentic regions, so the *change* in ELA
+    response across qualities (not just its value at one quality) carries
+    extra signal. We compute ELA at each quality plus a delta between the
+    lowest and highest quality response."""
+    feats = {}
+    ela_maps = {}
+    for q in qualities:
+        ela_map = compute_ela(path, quality=q)
+        ela_maps[q] = ela_map
+        feats.update(ela_summary_features(ela_map, prefix=f"ela_q{q}"))
+
+    # Cross-quality delta: how much the ELA response changes between the
+    # most aggressive and least aggressive recompression
+    q_low, q_high = min(qualities), max(qualities)
+    delta = np.abs(ela_maps[q_low].astype(np.int16) - ela_maps[q_high].astype(np.int16)).astype(np.uint8)
+    feats.update(ela_summary_features(delta, prefix="ela_delta"))
+
     gray = cv2.imread(path, cv2.IMREAD_GRAYSCALE)
     if gray is None:
         raise FileNotFoundError(path)
-    feats = {}
-    feats.update(ela_summary_features(ela_map))
     feats.update(noise_features(gray))
     feats.update(edge_features(gray))
     return feats
@@ -89,7 +104,8 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--master-csv", type=Path, default=Path("data/master_index.csv"))
     ap.add_argument("--out", type=Path, default=Path("features/ela_features.csv"))
-    ap.add_argument("--quality", type=int, default=90)
+    ap.add_argument("--qualities", type=int, nargs="+", default=[70, 90, 95],
+                     help="JPEG qualities to compute multi-scale ELA at")
     args = ap.parse_args()
 
     df = pd.read_csv(args.master_csv)
@@ -97,7 +113,7 @@ def main():
     failed = []
     for _, row in tqdm(df.iterrows(), total=len(df), desc="ELA/noise features"):
         try:
-            feats = extract_all_features(row["image_path"], quality=args.quality)
+            feats = extract_all_features(row["image_path"], qualities=tuple(args.qualities))
             feats["case_id"] = row["case_id"]
             rows.append(feats)
         except Exception as e:
