@@ -6,8 +6,7 @@ Usage:
     python scripts/build_master_csv.py \
         --casia-authentic /path/to/CASIA2/Au \
         --casia-tampered  /path/to/CASIA2/Tp \
-        --coverage-authentic /path/to/COVERAGE/authentic \
-        --coverage-tampered  /path/to/COVERAGE/tampered \
+        --coverage-image-dir /path/to/COVERAGE/image \
         --sample
 
 Notes:
@@ -99,12 +98,31 @@ def assign_splits(rows, train=0.7, val=0.15, seed=SEED):
                 r["split"] = "internal_test"
 
 
+def split_coverage_folder(image_folder: Path):
+    """COVERAGE puts everything in one folder: N.tif is the original,
+    Nt.tif is the tampered/forged version of the same pair. Split them."""
+    if not image_folder or not image_folder.exists():
+        return [], []
+    all_files = list_images(image_folder)
+    authentic, tampered = [], []
+    for p in all_files:
+        stem = p.stem  # e.g. "1" or "1t"
+        if stem.endswith("t"):
+            tampered.append((p, "tampered", "copy_move"))
+        else:
+            authentic.append((p, "authentic", "none"))
+    return authentic, tampered
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--casia-authentic", type=Path)
     ap.add_argument("--casia-tampered", type=Path)
-    ap.add_argument("--coverage-authentic", type=Path)
+    ap.add_argument("--coverage-authentic", type=Path,
+                     help="Use only if your external dataset already has separate authentic/tampered folders")
     ap.add_argument("--coverage-tampered", type=Path)
+    ap.add_argument("--coverage-image-dir", type=Path,
+                     help="COVERAGE's native layout: one folder with N.tif (original) and Nt.tif (tampered) pairs")
     ap.add_argument("--out", type=Path, default=Path("data/master_index.csv"))
     ap.add_argument("--sample", action="store_true",
                      help="Cap CASIA to 500/500/300 authentic/spliced/copy_move")
@@ -144,12 +162,19 @@ def main():
         print("[CASIA] no paths given, skipping", file=sys.stderr)
 
     # ---- COVERAGE (external test only, never trained on) ----
-    if args.coverage_authentic or args.coverage_tampered:
+    if args.coverage_image_dir:
+        cov_auth, cov_tamp = split_coverage_folder(args.coverage_image_dir)
+        print(f"[COVERAGE, native layout] authentic={len(cov_auth)} tampered={len(cov_tamp)}")
+    elif args.coverage_authentic or args.coverage_tampered:
         cov_auth = [(p, "authentic", "none") for p in list_images(args.coverage_authentic)] \
             if args.coverage_authentic else []
         cov_tamp = [(p, "tampered", "copy_move") for p in list_images(args.coverage_tampered)] \
             if args.coverage_tampered else []
-        print(f"[COVERAGE] authentic={len(cov_auth)} tampered={len(cov_tamp)}")
+        print(f"[COVERAGE, split layout] authentic={len(cov_auth)} tampered={len(cov_tamp)}")
+    else:
+        cov_auth, cov_tamp = [], []
+
+    if cov_auth or cov_tamp:
         cov_rows = build_rows(cov_auth + cov_tamp, "coverage", hash_files=not args.no_hash)
         for r in cov_rows:
             r["split"] = "external_test"
