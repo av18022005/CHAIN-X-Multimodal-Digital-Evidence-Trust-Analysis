@@ -8,7 +8,8 @@ Usage:
         --master-csv data/master_index.csv \
         --ela-csv features/ela_features.csv \
         --embeddings-dir features/embeddings \
-        --model rf
+        --model rf \
+        --features all
 """
 import argparse
 import pickle
@@ -44,7 +45,7 @@ def load_embedding(embeddings_dir: Path, case_id: str, dim: int = 1280) -> np.nd
     return np.full(dim, np.nan)  # missing embedding -> handled by caller
 
 
-def build_feature_table(master_csv, ela_csv, embeddings_dir):
+def build_feature_table(master_csv, ela_csv, embeddings_dir, feature_set="all"):
     df = pd.read_csv(master_csv)
     if "sha256" in df.columns:
         assert_no_leakage(df)
@@ -57,15 +58,22 @@ def build_feature_table(master_csv, ela_csv, embeddings_dir):
     emb_df = pd.DataFrame(embeddings, columns=emb_cols)
     df = pd.concat([df.reset_index(drop=True), emb_df], axis=1)
 
-    # Drop rows with no embedding AND no ELA features at all (nothing to learn from)
     ela_feature_cols = [c for c in ela_df.columns if c != "case_id"]
+
+    # Drop rows with no embedding AND no ELA features at all (nothing to learn from)
     before = len(df)
     df = df.dropna(subset=emb_cols + ela_feature_cols, how="all")
     if len(df) < before:
         print(f"Dropped {before - len(df)} rows with no usable image features")
 
+    if feature_set == "ela_only":
+        feature_cols = ela_feature_cols
+    elif feature_set == "embeddings_only":
+        feature_cols = emb_cols
+    else:
+        feature_cols = ela_feature_cols + emb_cols
+
     # Simple imputation: fill remaining NaNs (partial modality availability) with column mean
-    feature_cols = ela_feature_cols + emb_cols
     df[feature_cols] = df[feature_cols].fillna(df[feature_cols].mean())
 
     return df, feature_cols
@@ -81,12 +89,21 @@ def train_and_eval(df, feature_cols, model_type="rf"):
     external_test_mask = df["split"] == "external_test"
 
     if model_type == "rf":
-        clf = RandomForestClassifier(n_estimators=300, random_state=SEED, n_jobs=-1)
+        clf = RandomForestClassifier(
+            n_estimators=300, random_state=SEED, n_jobs=-1,
+            class_weight="balanced",  # counter the 500 authentic / 800 tampered imbalance
+        )
     elif model_type == "xgb":
         from xgboost import XGBClassifier
+        y_train = y[train_mask.values]
+        # scale_pos_weight = (negative count) / (positive count), computed on TRAIN only
+        n_pos = int(y_train.sum())
+        n_neg = int((1 - y_train).sum())
+        scale_pos_weight = n_neg / max(n_pos, 1)
         clf = XGBClassifier(
             n_estimators=300, max_depth=6, learning_rate=0.05,
             random_state=SEED, eval_metric="logloss", n_jobs=-1,
+            scale_pos_weight=scale_pos_weight,
         )
     else:
         raise ValueError(f"Unknown model_type: {model_type}")
@@ -124,11 +141,19 @@ def main():
     ap.add_argument("--ela-csv", type=Path, default=Path("features/ela_features.csv"))
     ap.add_argument("--embeddings-dir", type=Path, default=Path("features/embeddings"))
     ap.add_argument("--model", choices=["rf", "xgb"], default="rf")
-    ap.add_argument("--out-model", type=Path, default=Path("models/image_classifier_v01.pkl"))
+    ap.add_argument("--features", choices=["all", "ela_only", "embeddings_only"], default="all",
+                     help="Ablation: use only ELA features, only CNN embeddings, or both combined")
+    ap.add_argument("--out-model", type=Path, default=None,
+                     help="Defaults to models/image_classifier_<model>_<features>.pkl")
     args = ap.parse_args()
 
-    df, feature_cols = build_feature_table(args.master_csv, args.ela_csv, args.embeddings_dir)
-    print(f"Feature table: {len(df)} rows, {len(feature_cols)} features")
+    if args.out_model is None:
+        args.out_model = Path(f"models/image_classifier_{args.model}_{args.features}.pkl")
+
+    df, feature_cols = build_feature_table(
+        args.master_csv, args.ela_csv, args.embeddings_dir, feature_set=args.features
+    )
+    print(f"Feature table: {len(df)} rows, {len(feature_cols)} features ({args.features})")
 
     clf, results = train_and_eval(df, feature_cols, model_type=args.model)
 
@@ -144,7 +169,7 @@ def main():
         "experiment": args.out_model.stem,
         "dataset": "CASIA+COVERAGE",
         "model": args.model,
-        "features": "ELA+EfficientNet",
+        "features": args.features,
         "val_f1": results["val"]["f1"] if results["val"] else None,
         "internal_test_f1": results["internal_test"]["f1"] if results["internal_test"] else None,
         "external_test_f1": results["external_test"]["f1"] if results["external_test"] else None,
