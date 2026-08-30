@@ -8,8 +8,7 @@ Usage:
         --master-csv data/master_index.csv \
         --ela-csv features/ela_features.csv \
         --embeddings-dir features/embeddings \
-        --model rf \
-        --features all
+        --model rf
 """
 import argparse
 import pickle
@@ -18,9 +17,19 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 from sklearn.ensemble import RandomForestClassifier
-from sklearn.metrics import accuracy_score, f1_score, roc_auc_score, classification_report
+from sklearn.metrics import accuracy_score, f1_score, roc_auc_score, classification_report, precision_recall_curve
 
 SEED = 42
+
+
+def find_best_threshold(y_true, probs):
+    """Pick the probability threshold that maximizes F1 on the given
+    (validation) set. Avoids blindly using 0.5, which can be a poor cutoff
+    when classes are imbalanced or the model's calibration is off."""
+    precisions, recalls, thresholds = precision_recall_curve(y_true, probs)
+    f1s = 2 * precisions * recalls / (precisions + recalls + 1e-9)
+    best_idx = np.argmax(f1s[:-1]) if len(thresholds) > 0 else 0
+    return float(thresholds[best_idx]) if len(thresholds) > 0 else 0.5
 
 
 def assert_no_leakage(df: pd.DataFrame):
@@ -110,12 +119,17 @@ def train_and_eval(df, feature_cols, model_type="rf"):
 
     clf.fit(X[train_mask.values], y[train_mask.values])
 
+    # Tune the decision threshold on VALIDATION only, then apply it everywhere else
+    val_probs = clf.predict_proba(X[val_mask.values])[:, 1] if val_mask.sum() > 0 else None
+    threshold = find_best_threshold(y[val_mask.values], val_probs) if val_probs is not None else 0.5
+    print(f"\n[threshold] Using validation-tuned decision threshold = {threshold:.3f} (default would be 0.5)")
+
     def report(mask, name):
         if mask.sum() == 0:
             print(f"[{name}] no rows, skipping")
             return
-        preds = clf.predict(X[mask.values])
         probs = clf.predict_proba(X[mask.values])[:, 1]
+        preds = (probs >= threshold).astype(int)
         acc = accuracy_score(y[mask.values], preds)
         f1 = f1_score(y[mask.values], preds)
         try:
