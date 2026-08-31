@@ -73,30 +73,87 @@ def edge_features(gray: np.ndarray) -> dict:
     }
 
 
-def extract_all_features(path: str, qualities=(70, 90, 95)) -> dict:
-    """Multi-quality ELA: tampered regions often respond differently across
-    recompression qualities than authentic regions, so the *change* in ELA
-    response across qualities (not just its value at one quality) carries
-    extra signal. We compute ELA at each quality plus a delta between the
-    lowest and highest quality response."""
-    feats = {}
-    ela_maps = {}
-    for q in qualities:
-        ela_map = compute_ela(path, quality=q)
-        ela_maps[q] = ela_map
-        feats.update(ela_summary_features(ela_map, prefix=f"ela_q{q}"))
+def patch_localized_features(ela_map: np.ndarray, gray: np.ndarray, grid_size: int = 8) -> dict:
+    """Splits the image into a grid_size x grid_size grid and measures the
+    ELA response separately in each cell. Tampered regions are usually
+    LOCALIZED (one pasted-in patch), so genuine tampering should show up
+    as one or a few patches with an unusually high ELA response compared
+    to the rest of the same image — not as a uniform whole-image shift.
 
-    # Cross-quality delta: how much the ELA response changes between the
-    # most aggressive and least aggressive recompression
-    q_low, q_high = min(qualities), max(qualities)
-    delta = np.abs(ela_maps[q_low].astype(np.int16) - ela_maps[q_high].astype(np.int16)).astype(np.uint8)
-    feats.update(ela_summary_features(delta, prefix="ela_delta"))
+    This is a *relative*, self-normalizing signal (each patch is compared
+    only to other patches in the SAME image), so unlike multi-quality ELA
+    it shouldn't pick up on a dataset's absolute compression settings —
+    only on internal inconsistency within a single photo. That makes it
+    more likely to generalize across datasets with different JPEG history.
+    """
+    h, w = ela_map.shape
+    cell_h, cell_w = h // grid_size, w // grid_size
+    if cell_h == 0 or cell_w == 0:
+        # image too small to grid meaningfully; fall back to whole-image stats
+        return {
+            "patch_ela_mean_of_means": float(np.mean(ela_map)),
+            "patch_ela_std_of_means": 0.0,
+            "patch_ela_max_zscore": 0.0,
+            "patch_ela_max_minus_median": 0.0,
+            "patch_edge_std_of_means": 0.0,
+        }
+
+    ela_patch_means = []
+    edge_patch_means = []
+    edges = cv2.Canny(gray, 100, 200)
+
+    for i in range(grid_size):
+        for j in range(grid_size):
+            y0, y1 = i * cell_h, (i + 1) * cell_h
+            x0, x1 = j * cell_w, (j + 1) * cell_w
+            ela_patch_means.append(float(ela_map[y0:y1, x0:x1].mean()))
+            edge_patch_means.append(float(np.mean(edges[y0:y1, x0:x1] > 0)))
+
+    ela_patch_means = np.array(ela_patch_means)
+    edge_patch_means = np.array(edge_patch_means)
+
+    mean_of_means = ela_patch_means.mean()
+    std_of_means = ela_patch_means.std()
+    median = np.median(ela_patch_means)
+    # z-score of the single most extreme patch: how many standard deviations
+    # does the "hottest" patch sit above the rest of the image?
+    max_zscore = float((ela_patch_means.max() - mean_of_means) / (std_of_means + 1e-6))
+
+    return {
+        "patch_ela_mean_of_means": float(mean_of_means),
+        "patch_ela_std_of_means": float(std_of_means),
+        "patch_ela_max_zscore": max_zscore,
+        "patch_ela_max_minus_median": float(ela_patch_means.max() - median),
+        "patch_edge_std_of_means": float(edge_patch_means.std()),
+    }
+
+
+def extract_all_features(path: str, qualities=(90,), grid_size: int = 8) -> dict:
+    """Single-quality ELA (generalizes better, per our earlier ablation) +
+    global summary stats + patch-localized anomaly features."""
+    feats = {}
+    quality = qualities[0] if len(qualities) == 1 else qualities[-1]
+    ela_map = compute_ela(path, quality=quality)
+    feats.update(ela_summary_features(ela_map, prefix="ela"))
+
+    if len(qualities) > 1:
+        # optional: still support multi-quality if explicitly requested,
+        # but this is OFF by default now (see main()'s new default)
+        ela_maps = {quality: ela_map}
+        for q in qualities:
+            if q not in ela_maps:
+                ela_maps[q] = compute_ela(path, quality=q)
+                feats.update(ela_summary_features(ela_maps[q], prefix=f"ela_q{q}"))
+        q_low, q_high = min(qualities), max(qualities)
+        delta = np.abs(ela_maps[q_low].astype(np.int16) - ela_maps[q_high].astype(np.int16)).astype(np.uint8)
+        feats.update(ela_summary_features(delta, prefix="ela_delta"))
 
     gray = cv2.imread(path, cv2.IMREAD_GRAYSCALE)
     if gray is None:
         raise FileNotFoundError(path)
     feats.update(noise_features(gray))
     feats.update(edge_features(gray))
+    feats.update(patch_localized_features(ela_map, gray, grid_size=grid_size))
     return feats
 
 
@@ -104,16 +161,20 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--master-csv", type=Path, default=Path("data/master_index.csv"))
     ap.add_argument("--out", type=Path, default=Path("features/ela_features.csv"))
-    ap.add_argument("--qualities", type=int, nargs="+", default=[70, 90, 95],
-                     help="JPEG qualities to compute multi-scale ELA at")
+    ap.add_argument("--qualities", type=int, nargs="+", default=[90],
+                     help="JPEG quality/qualities for ELA. Default is single-quality "
+                          "(90) since multi-quality was found to overfit to a "
+                          "dataset's specific compression history in testing.")
+    ap.add_argument("--grid-size", type=int, default=8,
+                     help="Grid size for patch-localized anomaly features (e.g. 8 = 8x8 = 64 patches)")
     args = ap.parse_args()
 
     df = pd.read_csv(args.master_csv)
     rows = []
     failed = []
-    for _, row in tqdm(df.iterrows(), total=len(df), desc="ELA/noise features"):
+    for _, row in tqdm(df.iterrows(), total=len(df), desc="ELA/noise/patch features"):
         try:
-            feats = extract_all_features(row["image_path"], qualities=tuple(args.qualities))
+            feats = extract_all_features(row["image_path"], qualities=tuple(args.qualities), grid_size=args.grid_size)
             feats["case_id"] = row["case_id"]
             rows.append(feats)
         except Exception as e:
