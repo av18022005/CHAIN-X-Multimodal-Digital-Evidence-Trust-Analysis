@@ -6,7 +6,8 @@ Usage:
     python scripts/build_master_csv.py \
         --casia-authentic /path/to/CASIA2/Au \
         --casia-tampered  /path/to/CASIA2/Tp \
-        --coverage-image-dir /path/to/COVERAGE/image \
+        --coverage-authentic /path/to/COVERAGE/authentic \
+        --coverage-tampered  /path/to/COVERAGE/tampered \
         --sample
 
 Notes:
@@ -125,7 +126,13 @@ def main():
                      help="COVERAGE's native layout: one folder with N.tif (original) and Nt.tif (tampered) pairs")
     ap.add_argument("--out", type=Path, default=Path("data/master_index.csv"))
     ap.add_argument("--sample", action="store_true",
-                     help="Cap CASIA to 500/500/300 authentic/spliced/copy_move")
+                     help="Cap CASIA to the sizes given by --n-authentic/--n-spliced/--n-copymove")
+    ap.add_argument("--n-authentic", type=int, default=500,
+                     help="Max authentic CASIA images to sample (only used with --sample)")
+    ap.add_argument("--n-spliced", type=int, default=500,
+                     help="Max spliced CASIA images to sample (only used with --sample)")
+    ap.add_argument("--n-copymove", type=int, default=300,
+                     help="Max copy-move CASIA images to sample (only used with --sample)")
     ap.add_argument("--no-hash", action="store_true",
                      help="Skip SHA-256 hashing (faster, do this for a quick dry run)")
     args = ap.parse_args()
@@ -146,9 +153,9 @@ def main():
             rnd.shuffle(auth)
             rnd.shuffle(spliced)
             rnd.shuffle(copy_move)
-            auth = auth[:500]
-            spliced = spliced[:500]
-            copy_move = copy_move[:300]
+            auth = auth[:args.n_authentic]
+            spliced = spliced[:args.n_spliced]
+            copy_move = copy_move[:args.n_copymove]
             tamp = spliced + copy_move
 
         print(f"[CASIA] authentic={len(auth)} spliced="
