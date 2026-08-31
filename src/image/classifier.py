@@ -17,9 +17,22 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 from sklearn.ensemble import RandomForestClassifier
+from sklearn.model_selection import GridSearchCV
 from sklearn.metrics import accuracy_score, f1_score, roc_auc_score, classification_report, precision_recall_curve
 
 SEED = 42
+
+RF_PARAM_GRID = {
+    "n_estimators": [200, 400, 600],
+    "max_depth": [None, 10, 20],
+    "min_samples_leaf": [1, 2, 4],
+}
+
+XGB_PARAM_GRID = {
+    "n_estimators": [200, 400],
+    "max_depth": [4, 6, 8],
+    "learning_rate": [0.03, 0.05, 0.1],
+}
 
 
 def find_best_threshold(y_true, probs):
@@ -88,7 +101,7 @@ def build_feature_table(master_csv, ela_csv, embeddings_dir, feature_set="all"):
     return df, feature_cols
 
 
-def train_and_eval(df, feature_cols, model_type="rf"):
+def train_and_eval(df, feature_cols, model_type="rf", tune=False):
     y = (df["label"] == "tampered").astype(int)
     X = df[feature_cols].values
 
@@ -97,27 +110,47 @@ def train_and_eval(df, feature_cols, model_type="rf"):
     internal_test_mask = df["split"] == "internal_test"
     external_test_mask = df["split"] == "external_test"
 
+    X_train, y_train = X[train_mask.values], y[train_mask.values]
+
     if model_type == "rf":
-        clf = RandomForestClassifier(
-            n_estimators=300, random_state=SEED, n_jobs=-1,
-            class_weight="balanced",  # counter the 500 authentic / 800 tampered imbalance
-        )
+        if tune:
+            print("[tune] Running GridSearchCV on TRAIN split only (5-fold CV, scoring=f1)...")
+            base = RandomForestClassifier(random_state=SEED, n_jobs=-1, class_weight="balanced")
+            search = GridSearchCV(base, RF_PARAM_GRID, scoring="f1", cv=5, n_jobs=-1)
+            search.fit(X_train, y_train)
+            clf = search.best_estimator_
+            print(f"[tune] Best params: {search.best_params_} (CV F1={search.best_score_:.3f})")
+        else:
+            clf = RandomForestClassifier(
+                n_estimators=300, random_state=SEED, n_jobs=-1,
+                class_weight="balanced",  # counter class imbalance
+            )
     elif model_type == "xgb":
         from xgboost import XGBClassifier
-        y_train = y[train_mask.values]
-        # scale_pos_weight = (negative count) / (positive count), computed on TRAIN only
         n_pos = int(y_train.sum())
         n_neg = int((1 - y_train).sum())
         scale_pos_weight = n_neg / max(n_pos, 1)
-        clf = XGBClassifier(
-            n_estimators=300, max_depth=6, learning_rate=0.05,
-            random_state=SEED, eval_metric="logloss", n_jobs=-1,
-            scale_pos_weight=scale_pos_weight,
-        )
+        if tune:
+            print("[tune] Running GridSearchCV on TRAIN split only (5-fold CV, scoring=f1)...")
+            base = XGBClassifier(
+                random_state=SEED, eval_metric="logloss", n_jobs=-1,
+                scale_pos_weight=scale_pos_weight,
+            )
+            search = GridSearchCV(base, XGB_PARAM_GRID, scoring="f1", cv=5, n_jobs=-1)
+            search.fit(X_train, y_train)
+            clf = search.best_estimator_
+            print(f"[tune] Best params: {search.best_params_} (CV F1={search.best_score_:.3f})")
+        else:
+            clf = XGBClassifier(
+                n_estimators=300, max_depth=6, learning_rate=0.05,
+                random_state=SEED, eval_metric="logloss", n_jobs=-1,
+                scale_pos_weight=scale_pos_weight,
+            )
     else:
         raise ValueError(f"Unknown model_type: {model_type}")
 
-    clf.fit(X[train_mask.values], y[train_mask.values])
+    if not tune:
+        clf.fit(X_train, y_train)
 
     # Tune the decision threshold on VALIDATION only, then apply it everywhere else
     val_probs = clf.predict_proba(X[val_mask.values])[:, 1] if val_mask.sum() > 0 else None
@@ -159,6 +192,9 @@ def main():
                      help="Ablation: use only ELA features, only CNN embeddings, or both combined")
     ap.add_argument("--out-model", type=Path, default=None,
                      help="Defaults to models/image_classifier_<model>_<features>.pkl")
+    ap.add_argument("--tune", action="store_true",
+                     help="Search for better hyperparameters via 5-fold CV on the TRAIN split only "
+                          "(never touches val/test, so this is safe from leakage)")
     args = ap.parse_args()
 
     if args.out_model is None:
@@ -169,7 +205,7 @@ def main():
     )
     print(f"Feature table: {len(df)} rows, {len(feature_cols)} features ({args.features})")
 
-    clf, results = train_and_eval(df, feature_cols, model_type=args.model)
+    clf, results = train_and_eval(df, feature_cols, model_type=args.model, tune=args.tune)
 
     args.out_model.parent.mkdir(parents=True, exist_ok=True)
     with open(args.out_model, "wb") as f:
