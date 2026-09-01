@@ -86,6 +86,8 @@ def generate_report_for_row(row) -> dict:
 
     if has_ground_truth:
         inject_contradiction = random.random() < CONTRADICTION_RATE
+        camera_corrupted = False
+        date_corrupted = False
         if inject_contradiction:
             # Corrupt camera, date, or both (roughly evenly)
             corrupt_what = random.choice(["camera", "date", "both"])
@@ -94,8 +96,10 @@ def generate_report_for_row(row) -> dict:
             if corrupt_what in ("camera", "both"):
                 distractors = [c for c in CAMERA_POOL if c.lower() != real_camera.lower()]
                 claimed_camera = random.choice(distractors)
+                camera_corrupted = True
             if corrupt_what in ("date", "both"):
                 claimed_date = random_wrong_date(real_date)
+                date_corrupted = True
         else:
             claimed_camera = real_camera
             claimed_date = real_date
@@ -104,6 +108,8 @@ def generate_report_for_row(row) -> dict:
         return {
             "report_text": report_text,
             "is_contradiction_injected": inject_contradiction,
+            "camera_contradiction_injected": camera_corrupted,
+            "date_contradiction_injected": date_corrupted,
             "ground_truth_available": True,
         }
 
@@ -114,6 +120,8 @@ def generate_report_for_row(row) -> dict:
     return {
         "report_text": report_text,
         "is_contradiction_injected": False,  # not meaningful here
+        "camera_contradiction_injected": False,
+        "date_contradiction_injected": False,
         "ground_truth_available": False,
     }
 
@@ -128,7 +136,11 @@ def generate_reports(metadata_csv: str, seed: int = 42) -> pd.DataFrame:
         gen["case_id"] = row["case_id"]
         records.append(gen)
 
-    out = pd.DataFrame(records)[["case_id", "report_text", "is_contradiction_injected", "ground_truth_available"]]
+    out = pd.DataFrame(records)[[
+        "case_id", "report_text", "is_contradiction_injected",
+        "camera_contradiction_injected", "date_contradiction_injected",
+        "ground_truth_available",
+    ]]
     return out
 
 
