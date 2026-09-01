@@ -19,6 +19,25 @@ from src.nlp.extractor import extract_from_csv
 from src.nlp.consistency import run_consistency_check, score_row
 
 
+def compute_binary_metrics(y_true: pd.Series, y_pred: pd.Series) -> dict:
+    y_true, y_pred = y_true.astype(bool), y_pred.astype(bool)
+    tp = int((y_true & y_pred).sum())
+    fp = int((~y_true & y_pred).sum())
+    fn = int((y_true & ~y_pred).sum())
+    tn = int((~y_true & ~y_pred).sum())
+    precision = tp / (tp + fp) if (tp + fp) else 0.0
+    recall = tp / (tp + fn) if (tp + fn) else 0.0
+    f1 = 2 * precision * recall / (precision + recall) if (precision + recall) else 0.0
+    accuracy = (tp + tn) / len(y_true) if len(y_true) else 0.0
+    return {
+        "tp": tp, "fp": fp, "fn": fn, "tn": tn,
+        "precision": round(precision, 3),
+        "recall": round(recall, 3),
+        "f1": round(f1, 3),
+        "accuracy": round(accuracy, 3),
+    }
+
+
 def evaluate(result: pd.DataFrame, ground_truth_col: str) -> dict:
     if ground_truth_col not in result.columns:
         return {}
@@ -31,26 +50,21 @@ def evaluate(result: pd.DataFrame, ground_truth_col: str) -> dict:
         if result.empty:
             return {}
 
-    y_true = result[ground_truth_col].astype(bool)
-    y_pred = result["flagged_contradiction"].astype(bool)
+    metrics = {"overall": compute_binary_metrics(result[ground_truth_col], result["flagged_contradiction"])}
 
-    tp = int(((y_true) & (y_pred)).sum())
-    fp = int(((~y_true) & (y_pred)).sum())
-    fn = int(((y_true) & (~y_pred)).sum())
-    tn = int(((~y_true) & (~y_pred)).sum())
+    # Per-field breakdown: does the system separately catch a wrong camera
+    # vs. a wrong date? camera_match/date_match True = "system thinks this
+    # field is consistent", so a caught contradiction is (not camera_match).
+    if "camera_contradiction_injected" in result.columns and "camera_match" in result.columns:
+        metrics["camera_field"] = compute_binary_metrics(
+            result["camera_contradiction_injected"], ~result["camera_match"].astype(bool)
+        )
+    if "date_contradiction_injected" in result.columns and "date_match" in result.columns:
+        metrics["date_field"] = compute_binary_metrics(
+            result["date_contradiction_injected"], ~result["date_match"].astype(bool)
+        )
 
-    precision = tp / (tp + fp) if (tp + fp) else 0.0
-    recall = tp / (tp + fn) if (tp + fn) else 0.0
-    f1 = 2 * precision * recall / (precision + recall) if (precision + recall) else 0.0
-    accuracy = (tp + tn) / len(result) if len(result) else 0.0
-
-    return {
-        "tp": tp, "fp": fp, "fn": fn, "tn": tn,
-        "precision": round(precision, 3),
-        "recall": round(recall, 3),
-        "f1": round(f1, 3),
-        "accuracy": round(accuracy, 3),
-    }
+    return metrics
 
 
 def main():
@@ -80,8 +94,10 @@ def main():
     metrics = evaluate(result, args.ground_truth_col)
     if metrics:
         print(f"[3/3] Evaluation vs. injected ground truth ('{args.ground_truth_col}'):")
-        for k, v in metrics.items():
-            print(f"      {k}: {v}")
+        for section, section_metrics in metrics.items():
+            print(f"      -- {section} --")
+            for k, v in section_metrics.items():
+                print(f"         {k}: {v}")
     else:
         print(f"[3/3] No ground-truth column '{args.ground_truth_col}' found — skipping eval.")
 
