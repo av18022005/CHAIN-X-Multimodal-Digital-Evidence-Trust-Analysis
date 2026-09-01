@@ -23,6 +23,14 @@ def evaluate(result: pd.DataFrame, ground_truth_col: str) -> dict:
     if ground_truth_col not in result.columns:
         return {}
 
+    # Only evaluate rows that actually had real metadata to compare against.
+    # Rows with no real EXIF got a fabricated claim with no true right answer,
+    # so including them would distort precision/recall.
+    if "ground_truth_available" in result.columns:
+        result = result[result["ground_truth_available"] == True]  # noqa: E712
+        if result.empty:
+            return {}
+
     y_true = result[ground_truth_col].astype(bool)
     y_pred = result["flagged_contradiction"].astype(bool)
 
