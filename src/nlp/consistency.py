@@ -41,6 +41,11 @@ def camera_similarity(a: str, b: str) -> float:
 
 
 def score_row(claimed_camera, claimed_date, real_camera, real_date) -> dict:
+    # Normalize FIRST, then use the normalized (string) values for presence
+    # checks. Raw values from a CSV round-trip can be NaN (a float), and
+    # bool(float('nan')) is True in Python -- checking truthiness on the
+    # raw value before normalizing would wrongly treat "missing" as "present".
+    real_camera_norm = normalize_camera(real_camera)
     cam_sim = camera_similarity(claimed_camera, real_camera)
     camera_match = cam_sim >= CAMERA_MATCH_THRESHOLD
 
@@ -51,7 +56,7 @@ def score_row(claimed_camera, claimed_date, real_camera, real_date) -> dict:
     # Consistency score: 1.0 = fully consistent, 0.0 = fully contradicted.
     # Weighted average; missing real data treated as "cannot verify" (neutral 0.5).
     parts = []
-    if real_camera:
+    if real_camera_norm:
         parts.append(1.0 if camera_match else 0.0)
     if real_date_norm:
         parts.append(1.0 if date_match else 0.0)
