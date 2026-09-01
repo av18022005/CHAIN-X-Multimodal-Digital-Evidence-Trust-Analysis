@@ -60,14 +60,23 @@ def score_row(claimed_camera, claimed_date, real_camera, real_date) -> dict:
         parts.append(1.0 if camera_match else 0.0)
     if real_date_norm:
         parts.append(1.0 if date_match else 0.0)
-    consistency_score = sum(parts) / len(parts) if parts else 0.5
+    if not parts:
+        # No real metadata to compare against at all -- unverifiable, never flag.
+        consistency_score = 0.5
+        flagged = False
+    else:
+        consistency_score = sum(parts) / len(parts)
+        # <=0.5 (not strictly <) so single-field contradictions -- which land
+        # exactly on a 0.5 tie when only one of two fields is wrong -- still
+        # get flagged instead of slipping through.
+        flagged = consistency_score <= 0.5
 
     return {
         "camera_match": camera_match,
         "camera_similarity": round(cam_sim, 3),
         "date_match": date_match,
         "consistency_score": round(consistency_score, 3),
-        "flagged_contradiction": consistency_score < 0.5,
+        "flagged_contradiction": flagged,
     }
 
 
