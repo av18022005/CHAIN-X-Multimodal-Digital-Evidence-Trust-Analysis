@@ -35,6 +35,7 @@ def main():
             result["camera_make"] = meta["camera_make"]
             result["camera_model"] = meta["camera_model"]
             result["software"] = meta["software"]
+            result["datetime_original"] = meta["datetime_original"]
             rows.append(result)
         except Exception as e:
             failed.append((row["case_id"], str(e)))
