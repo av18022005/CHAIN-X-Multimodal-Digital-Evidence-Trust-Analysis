@@ -14,14 +14,27 @@ import re
 import argparse
 import pandas as pd
 
-# Matches "using <camera model> on <date>"
-CAMERA_DATE_RE = re.compile(
-    r"using\s+(?P<camera>.+?)\s+on\s+(?P<date>\d{4}-\d{2}-\d{2})",
+# Each of report_generator.py's REPORT_TEMPLATES needs its own pattern --
+# a single generic regex can't reliably span "using a X on DATE" AND
+# "Camera used: X. Date of capture: DATE" at once, since the connecting
+# words differ. Tried in order; first match wins.
+TEMPLATE_PATTERNS = [
+    # "The image was acquired using a {camera} on {date}."
+    re.compile(r"using\s+a\s+(?P<camera>.+?)\s+on\s+(?P<date>\d{4}-\d{2}-\d{2})", re.IGNORECASE),
+    # "Evidence photo captured with {camera} on {date}."
+    re.compile(r"captured\s+with\s+(?P<camera>.+?)\s+on\s+(?P<date>\d{4}-\d{2}-\d{2})", re.IGNORECASE),
+    # "Camera used: {camera}. Date of capture: {date}."
+    re.compile(r"camera\s+used:\s*(?P<camera>.+?)\.\s*date\s+of\s+capture:\s*(?P<date>\d{4}-\d{2}-\d{2})", re.IGNORECASE),
+    # Generic fallback: any "using <camera> on <date>" without the "a"
+    re.compile(r"using\s+(?P<camera>.+?)\s+on\s+(?P<date>\d{4}-\d{2}-\d{2})", re.IGNORECASE),
+]
+
+# Last-resort fallbacks if none of the template patterns match at all
+# (e.g. free-form or unexpected phrasing) -- extract camera and date independently.
+CAMERA_ONLY_RE = re.compile(
+    r"(?:using\s+a|using|captured\s+with|camera\s+used:)\s+(?P<camera>.+?)(?:\.|,|\s+on\s+\d{4}|$)",
     re.IGNORECASE,
 )
-
-# Fallback patterns in case template phrasing varies slightly
-CAMERA_ONLY_RE = re.compile(r"using\s+(?P<camera>.+?)(?:\.|,|$)", re.IGNORECASE)
 DATE_ONLY_RE = re.compile(r"(?P<date>\d{4}-\d{2}-\d{2})")
 
 
@@ -34,14 +47,15 @@ def extract_claims(report_text: str) -> dict:
     if not isinstance(report_text, str) or not report_text.strip():
         return {"claimed_camera": None, "claimed_date": None}
 
-    match = CAMERA_DATE_RE.search(report_text)
-    if match:
-        return {
-            "claimed_camera": match.group("camera").strip(),
-            "claimed_date": match.group("date").strip(),
-        }
+    for pattern in TEMPLATE_PATTERNS:
+        match = pattern.search(report_text)
+        if match:
+            return {
+                "claimed_camera": match.group("camera").strip(),
+                "claimed_date": match.group("date").strip(),
+            }
 
-    # Fallback: try camera and date separately
+    # None of the known templates matched -- fall back to independent extraction
     camera_match = CAMERA_ONLY_RE.search(report_text)
     date_match = DATE_ONLY_RE.search(report_text)
     return {
