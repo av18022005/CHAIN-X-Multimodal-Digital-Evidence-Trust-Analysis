@@ -35,8 +35,6 @@ WEIGHT_HASH_BREAK = 0.6
 WEIGHT_TIMESTAMP_VIOLATION = 0.25
 WEIGHT_MISSING_CUSTODIAN = 0.15
 
-FLAG_THRESHOLD = 0.05  # any nonzero weighted issue rate flags the case
-
 
 def build_case_graph(case_nodes: pd.DataFrame) -> nx.DiGraph:
     g = nx.DiGraph()
@@ -76,6 +74,13 @@ def analyze_case_graph(g: nx.DiGraph) -> dict:
         + WEIGHT_MISSING_CUSTODIAN * (missing_custodian / node_denom)
     )
 
+    # Flag on ANY detected issue, not a blended-score threshold. A single
+    # missing custodian record or one hash break is a real, independently
+    # meaningful chain-of-custody break -- diluting it into an averaged
+    # score (and thresholding that) let real issues slip through purely
+    # because the chain had many otherwise-clean events.
+    flagged = (hash_breaks > 0) or (timestamp_violations > 0) or (missing_custodian > 0)
+
     return {
         "n_events": n_nodes,
         "n_handoffs": n_edges,
@@ -84,7 +89,7 @@ def analyze_case_graph(g: nx.DiGraph) -> dict:
         "timestamp_violations": timestamp_violations,
         "missing_custodian": missing_custodian,
         "custody_risk_score": round(custody_risk_score, 4),
-        "flagged_custody_anomaly": custody_risk_score > FLAG_THRESHOLD,
+        "flagged_custody_anomaly": flagged,
     }
 
 
