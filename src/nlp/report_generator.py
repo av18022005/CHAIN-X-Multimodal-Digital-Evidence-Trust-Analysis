@@ -78,7 +78,11 @@ def clean_date(raw: str) -> str:
 
 
 def generate_report_for_row(row) -> dict:
-    real_camera = str(row.get("camera_model", "") or "").strip()
+    # pandas gives back NaN (a float) for missing values, and bool(float('nan'))
+    # is True in Python -- so `row.get(...) or ""` does NOT safely fall back to
+    # "" for NaN. Must check pd.notna() explicitly first.
+    raw_camera = row.get("camera_model", "")
+    real_camera = str(raw_camera).strip() if pd.notna(raw_camera) and str(raw_camera).strip() else ""
     real_date = clean_date(row.get("datetime_original", ""))
     has_ground_truth = bool(real_camera) and bool(real_date)
 
