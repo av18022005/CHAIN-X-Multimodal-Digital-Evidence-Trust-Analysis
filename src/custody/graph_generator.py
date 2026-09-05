@@ -100,7 +100,13 @@ def generate_case_graph(case_id: str, rng: random.Random) -> list[dict]:
                 current_hash = this_hash  # tampering persists downstream, as it would in reality
                 anomaly_here = "hash_mismatch"
             elif anomaly_type == "timestamp_violation":
-                this_timestamp = current_time - timedelta(hours=rng.randint(48, 200))
+                # Anchor to the ACTUAL previous node's stored timestamp, not the
+                # running "current_time" clock -- subtracting from current_time
+                # could land AFTER the real parent timestamp if the random gap
+                # just added was smaller than the random offset subtracted here,
+                # producing a "violation" that wasn't actually out of order.
+                parent_timestamp = datetime.fromisoformat(nodes[-1]["timestamp"]) if nodes else base_time
+                this_timestamp = parent_timestamp - timedelta(hours=rng.randint(1, 100))
                 anomaly_here = "timestamp_violation"
             elif anomaly_type == "missing_custodian":
                 this_actor = None
