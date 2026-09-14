@@ -78,6 +78,9 @@ def generate_case_graph(case_id: str, rng: random.Random) -> list[dict]:
         if case_will_have_anomaly else None
 
     nodes = []
+    event_timestamps = {}  # event_id -> datetime, so we can always find the TRUE
+                            # parent's timestamp by ID, never by list position
+                            # (list position breaks when a branch was just appended)
     current_time = base_time
     current_hash = real_hash
     parent_event_id = None
@@ -100,12 +103,12 @@ def generate_case_graph(case_id: str, rng: random.Random) -> list[dict]:
                 current_hash = this_hash  # tampering persists downstream, as it would in reality
                 anomaly_here = "hash_mismatch"
             elif anomaly_type == "timestamp_violation":
-                # Anchor to the ACTUAL previous node's stored timestamp, not the
-                # running "current_time" clock -- subtracting from current_time
-                # could land AFTER the real parent timestamp if the random gap
-                # just added was smaller than the random offset subtracted here,
-                # producing a "violation" that wasn't actually out of order.
-                parent_timestamp = datetime.fromisoformat(nodes[-1]["timestamp"]) if nodes else base_time
+                # Anchor to the TRUE parent's timestamp, looked up by event_id --
+                # NOT nodes[-1], which can be a branch copy appended after the
+                # real parent, giving the wrong reference point and sometimes
+                # producing a timestamp that isn't actually out of order
+                # relative to the real graph edge the analyzer checks.
+                parent_timestamp = event_timestamps.get(parent_event_id, base_time)
                 this_timestamp = parent_timestamp - timedelta(hours=rng.randint(1, 100))
                 anomaly_here = "timestamp_violation"
             elif anomaly_type == "missing_custodian":
@@ -123,6 +126,7 @@ def generate_case_graph(case_id: str, rng: random.Random) -> list[dict]:
             "sha256_hash": this_hash,
             "anomaly_injected": anomaly_here,
         })
+        event_timestamps[event_id] = this_timestamp
         parent_event_id = event_id
 
         # Occasionally branch: evidence copied to a second custodian mid-chain
@@ -140,6 +144,7 @@ def generate_case_graph(case_id: str, rng: random.Random) -> list[dict]:
                 "sha256_hash": this_hash,  # a legitimate copy keeps the same hash
                 "anomaly_injected": "none",
             })
+            event_timestamps[branch_event_id] = branch_time
 
     return nodes
 
