@@ -65,8 +65,13 @@ def main():
     args.out.parent.mkdir(parents=True, exist_ok=True)
     out.to_csv(args.out, index=False)
     print(f"Scored {len(out)} images -> {args.out}")
+
     if "image_correct" in out.columns:
-        print(f"Overall accuracy at threshold {args.threshold}: {out['image_correct'].mean():.3f}")
+        print("\nAccuracy by split (do NOT report the blended overall number -- "
+              "it mixes in 'train', which the model has already memorized):")
+        for split_name, group in out.groupby("split"):
+            note = "  <-- memorized, not a real result" if split_name == "train" else ""
+            print(f"  {split_name:15s} n={len(group):5d}  accuracy={group['image_correct'].mean():.3f}{note}")
 
 
 if __name__ == "__main__":
