@@ -25,9 +25,11 @@ Usage:
         --metadata-csv features/metadata_features.csv \
         --consistency-csv features/consistency_scores.csv \
         --custody-csv features/custody_risk_scores.csv \
-        --out features/evidence_health_index.csv
+        --out features/evidence_health_index.csv \
+        --save-model models/fusion_v1.pkl
 """
 import argparse
+import pickle
 from pathlib import Path
 
 import numpy as np
@@ -57,6 +59,10 @@ def main():
     ap.add_argument("--custody-csv", type=Path, required=True,
                      help="Output of graph_analyzer.py (Phase 6) -- diagnostic only, not trained on")
     ap.add_argument("--out", type=Path, required=True)
+    ap.add_argument("--save-model", type=Path, default=None,
+                     help="Optional path to save the trained fusion model as a pickle "
+                          "(e.g. models/fusion_v1.pkl). Saved in the same dict style as "
+                          "rf_final_locked_in.pkl: {'model', 'feature_cols', 'threshold'}.")
     args = ap.parse_args()
 
     img = pd.read_csv(args.image_scores)
@@ -119,6 +125,16 @@ def main():
         if f1 > best_f1:
             best_f1, best_thr = f1, thr
     print(f"Fusion decision threshold (val-tuned): {best_thr:.3f}")
+
+    if args.save_model:
+        args.save_model.parent.mkdir(parents=True, exist_ok=True)
+        with open(args.save_model, "wb") as f:
+            pickle.dump({
+                "model": clf,
+                "feature_cols": feat_cols,
+                "threshold": best_thr,
+            }, f)
+        print(f"Saved fusion model to {args.save_model}")
 
     print("\n=== FUSION (image + metadata) ===")
     for name, mask in [("internal_test", internal_mask), ("external_test", external_mask)]:
