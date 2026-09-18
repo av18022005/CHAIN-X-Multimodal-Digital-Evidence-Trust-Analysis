@@ -1,7 +1,13 @@
 """
 TIER 1 STREAMLIT DASHBOARD: Evidence Health Index (Research Paper Version)
+CHAIN-X — Multimodal Digital Evidence Trust Analysis
 Real data only — image + metadata → EHI with SHAP explanation.
-Visually redesigned version with Plotly charts and custom styling.
+
+Usage:
+    streamlit run app_tier1.py
+
+Dependencies:
+    pip install streamlit shap pandas numpy pillow opencv-python-headless scikit-learn plotly
 """
 
 import os
@@ -18,6 +24,7 @@ import shap
 import plotly.graph_objects as go
 import plotly.express as px
 
+# Add repo root to path so we can import from src/
 REPO_ROOT = Path(__file__).parent
 sys.path.insert(0, str(REPO_ROOT))
 
@@ -26,10 +33,10 @@ from src.metadata.extractor import extract_all_metadata
 from src.metadata.anomaly import analyze as analyze_metadata
 
 # ============================================================================
-# CONFIGURATION
+# CONFIGURATION & CONSTANTS
 # ============================================================================
 
-st.set_page_config(page_title="Evidence Health Index - Research Demo", layout="wide", page_icon="🔍")
+st.set_page_config(page_title="ChainX — Evidence Health Index", layout="wide", page_icon="🔍")
 
 MODEL_RF_PATH = "models/rf_final_locked_in.pkl"
 MODEL_FUSION_PATH = "models/fusion_v1.pkl"
@@ -37,27 +44,45 @@ SHAP_BG_PATH = "/kaggle/working/shap_background_combined.pkl"
 SHAP_COLS_PATH = "/kaggle/working/shap_feature_columns.pkl"
 NORM_STATS_PATH = "/kaggle/working/normalization_stats.json"
 DASHBOARD_METRICS_PATH = "/kaggle/working/features/dashboard_metrics_tier1.csv"
+# NOTE: if you run this outside the Kaggle notebook environment, copy these
+# four files next to the repo (e.g. into data/tier1_assets/) and update the
+# paths above accordingly.
 
 MODEL_METRICS = {
     "rf_classifier": {
         "name": "Image Classifier (Random Forest)",
-        "accuracy": 0.789, "precision": 0.795, "recall": 0.79,
-        "f1": 0.806, "auc": 0.861, "split": "internal_test (CASIA)",
-        "n_samples": 465, "threshold": 0.447,
+        "accuracy": 0.789,
+        "precision": 0.795,
+        "recall": 0.79,
+        "f1": 0.806,
+        "auc": 0.861,
+        "split": "internal_test (CASIA)",
+        "n_samples": 465,
+        "threshold": 0.447,
     },
     "fusion_model": {
         "name": "Fusion Model (Logistic Regression)",
-        "f1": 0.813, "auc": 0.871, "baseline_f1": 0.806, "baseline_auc": 0.861,
-        "improvement_f1_percent": 0.87, "improvement_auc_percent": 1.16,
-        "split": "internal_test (CASIA)", "n_samples": 465,
+        "f1": 0.813,
+        "auc": 0.871,
+        "baseline_f1": 0.806,
+        "baseline_auc": 0.861,
+        "improvement_f1_percent": 0.87,
+        "improvement_auc_percent": 1.16,
+        "split": "internal_test (CASIA)",
+        "n_samples": 465,
     },
 }
 
 DATASET_STATS = {
-    "total_cases": 3302, "authentic": 1605, "tampered": 1697,
-    "cross_modal_agreement_mean": 0.5678, "cross_modal_agreement_std": 0.1551,
-    "confidence_score_mean": 0.8885, "confidence_score_std": 0.2002,
-    "case_priority_score_mean": 0.4814, "case_priority_score_std": 0.4551,
+    "total_cases": 3302,
+    "authentic": 1605,
+    "tampered": 1697,
+    "cross_modal_agreement_mean": 0.5678,
+    "cross_modal_agreement_std": 0.1551,
+    "confidence_score_mean": 0.8885,
+    "confidence_score_std": 0.2002,
+    "case_priority_score_mean": 0.4814,
+    "case_priority_score_std": 0.4551,
 }
 
 ELA_FEATURE_NAMES = [
@@ -79,17 +104,32 @@ METADATA_FEATURE_NAMES = [
 
 CUSTOM_CSS = """
 <style>
+    .hero-header {
+        padding: 1.2rem 0 0.5rem 0;
+    }
+    .project-badge {
+        display: inline-block;
+        background: linear-gradient(135deg, #4361ee 0%, #3a0ca3 100%);
+        color: white;
+        font-weight: 800;
+        letter-spacing: 2px;
+        font-size: 0.85rem;
+        padding: 0.3rem 1rem;
+        border-radius: 20px;
+        margin-bottom: 0.8rem;
+    }
     .main-header {
-        font-size: 2.2rem;
-        font-weight: 700;
+        font-size: 3rem;
+        font-weight: 800;
         color: #1a1a2e;
         margin-bottom: 0;
+        line-height: 1.1;
     }
     .sub-header {
-        font-size: 1rem;
+        font-size: 1.15rem;
         color: #6c757d;
-        margin-top: 0;
-        margin-bottom: 1.5rem;
+        margin-top: 0.4rem;
+        margin-bottom: 2rem;
     }
     .verdict-card {
         padding: 1.5rem 2rem;
@@ -146,15 +186,69 @@ CUSTOM_CSS = """
         font-size: 0.8rem;
         margin-right: 0.4rem;
     }
+    .concept-card {
+        background: #ffffff;
+        border: 1px solid #e9ecef;
+        border-radius: 14px;
+        padding: 1.4rem 1.6rem;
+        margin-bottom: 1.2rem;
+        box-shadow: 0 1px 3px rgba(0,0,0,0.04);
+    }
+    .concept-title {
+        font-size: 1.25rem;
+        font-weight: 700;
+        color: #1a1a2e;
+        margin-bottom: 0.4rem;
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+    }
+    .concept-body {
+        font-size: 0.98rem;
+        color: #495057;
+        line-height: 1.55;
+    }
+    .verdict-rule {
+        display: inline-block;
+        background: #fff3cd;
+        color: #856404;
+        border-radius: 8px;
+        padding: 0.4rem 0.9rem;
+        font-weight: 600;
+        font-size: 0.9rem;
+        margin-top: 0.6rem;
+    }
+    .pipeline-step {
+        background: #f8f9fa;
+        border-radius: 10px;
+        padding: 0.8rem 1rem;
+        margin-bottom: 0.5rem;
+        border-left: 3px solid #4361ee;
+        font-size: 0.92rem;
+    }
+    .pipeline-step-num {
+        display: inline-block;
+        background: #4361ee;
+        color: white;
+        border-radius: 50%;
+        width: 22px;
+        height: 22px;
+        text-align: center;
+        line-height: 22px;
+        font-size: 0.8rem;
+        font-weight: 700;
+        margin-right: 0.6rem;
+    }
 </style>
 """
 
 # ============================================================================
-# LOAD MODELS & DATA
+# LOAD MODELS & DATA (cached for performance)
 # ============================================================================
 
 @st.cache_resource
 def load_models():
+    """Load RF classifier, fusion model, and SHAP background."""
     with open(MODEL_RF_PATH, "rb") as f:
         rf_data = pickle.load(f)
     rf_model = rf_data["model"]
@@ -165,7 +259,7 @@ def load_models():
     fusion_threshold = fusion_data["threshold"]
 
     with open(SHAP_BG_PATH, "rb") as f:
-        shap_bg = pickle.load(f)
+        shap_bg = pickle.load(f)  # shape (n, 24): 14 ELA cols + 10 metadata cols, in that order
 
     with open(SHAP_COLS_PATH, "rb") as f:
         shap_cols = pickle.load(f)
@@ -178,6 +272,7 @@ def load_models():
 
 @st.cache_data
 def load_dataset_sample():
+    """Load dashboard metrics for context."""
     try:
         return pd.read_csv(DASHBOARD_METRICS_PATH)
     except Exception:
@@ -189,6 +284,7 @@ def load_dataset_sample():
 # ============================================================================
 
 def process_uploaded_image(image_file):
+    """Extract ELA features and metadata from uploaded image."""
     temp_path = f"/tmp/upload_{image_file.name}"
     with open(temp_path, "wb") as f:
         f.write(image_file.getbuffer())
@@ -212,8 +308,10 @@ def process_uploaded_image(image_file):
     img.load()
 
     return {
-        "image": img, "ela_features": ela_features,
-        "metadata_features": metadata_features, "metadata_raw": metadata_raw,
+        "image": img,
+        "ela_features": ela_features,
+        "metadata_features": metadata_features,
+        "metadata_raw": metadata_raw,
         "temp_path": temp_path,
     }
 
@@ -231,17 +329,20 @@ def cleanup_temp_file(temp_path):
 # ============================================================================
 
 def predict_image_tampering(rf_model, ela_features):
+    """Predict image tampering probability using the 14 ELA features."""
     X = np.array([[ela_features[col] for col in ELA_FEATURE_NAMES]])
     proba = rf_model.predict_proba(X)[0]
     return proba[1]
 
 
 def score_metadata_anomaly(metadata_features):
+    """Extract metadata anomaly score."""
     return metadata_features.get("metadata_anomaly_score", 0.5)
 
 
 def compute_evidence_health_index(rf_model, fusion_model, fusion_threshold,
                                    ela_features, metadata_features, norm_stats):
+    """Compute all validated metrics from real data."""
     image_tamper_prob = predict_image_tampering(rf_model, ela_features)
     metadata_anomaly_score = score_metadata_anomaly(metadata_features)
 
@@ -269,13 +370,22 @@ def compute_evidence_health_index(rf_model, fusion_model, fusion_threshold,
 
 # ============================================================================
 # EXPLANATIONS
+# Two separate, correctly-scoped explanations:
+#   1. SHAP over the 14 ELA features -> explains the image classifier
+#   2. Coefficient x value breakdown over the 2 fusion inputs -> explains EHI
 # ============================================================================
 
 @st.cache_resource
 def build_shap_explainer(_rf_model, _shap_bg):
-    # FIX: explicit float64 cast — the combined background pickle has mixed
-    # dtypes (ELA floats + metadata strings), so slicing alone still leaves
-    # an object-dtype array, which SHAP's C extension refuses to cast.
+    """
+    Build a SHAP TreeExplainer for the RF image classifier.
+
+    The combined (24-col) background pickle mixes ELA floats with metadata
+    strings (camera_make, software, etc). Because a single NumPy array can
+    only hold one dtype, slicing out the first 14 ELA columns still leaves
+    an object-dtype array under the hood, which SHAP's C extension refuses
+    to safely cast to float64. Explicit cast fixes it.
+    """
     ela_background = np.asarray(_shap_bg)[:, :len(ELA_FEATURE_NAMES)].astype(np.float64)
     if ela_background.shape[0] > 100:
         rng = np.random.default_rng(42)
@@ -285,11 +395,13 @@ def build_shap_explainer(_rf_model, _shap_bg):
 
 
 def compute_shap_values(explainer, ela_features):
+    """Compute SHAP values for the 14 ELA features only (matches rf_model's training input)."""
     X = np.array([[ela_features[col] for col in ELA_FEATURE_NAMES]])
     return explainer.shap_values(X)
 
 
 def compute_fusion_contribution(fusion_model, image_tamper_prob, metadata_anomaly_score):
+    """Exact coefficient x value contribution of each fusion input to its logit."""
     if not hasattr(fusion_model, "coef_"):
         return None
     coefs = fusion_model.coef_[0]
@@ -373,21 +485,28 @@ def render_fusion_bar(contrib_df):
 
 def main():
     st.markdown(CUSTOM_CSS, unsafe_allow_html=True)
-    st.markdown('<p class="main-header">🔍 Evidence Health Index Dashboard</p>', unsafe_allow_html=True)
-    st.markdown('<p class="sub-header">Research Paper Demo · Real Data Analysis · Image + Metadata Fusion</p>', unsafe_allow_html=True)
+    st.markdown("""
+        <div class="hero-header">
+            <p class="project-badge">CHAIN-X</p>
+            <p class="main-header">🔍 Evidence Health Index Dashboard</p>
+            <p class="sub-header">Multimodal Digital Evidence Trust Analysis · Research Paper Demo · Real Data Only</p>
+        </div>
+    """, unsafe_allow_html=True)
 
     with st.spinner("Loading models..."):
         rf_model, fusion_model, fusion_threshold, shap_bg, shap_cols, norm_stats = load_models()
         dataset_df = load_dataset_sample()
 
     tab_upload, tab_explained, tab_metrics, tab_dataset = st.tabs([
-        "📤  Upload & Analyze", "📊  Understanding the Metrics",
-        "🎯  Model Performance", "📈  Dataset Overview",
+        "📤  Upload & Analyze",
+        "📊  Understanding the Metrics",
+        "🎯  Model Performance",
+        "📈  Dataset Overview",
     ])
 
-    # ------------------------------------------------------------------
+    # ========================================================================
     # TAB 1: UPLOAD & ANALYZE
-    # ------------------------------------------------------------------
+    # ========================================================================
     with tab_upload:
         col1, col2 = st.columns([1, 1])
 
@@ -510,52 +629,139 @@ def main():
                 st.plotly_chart(render_fusion_bar(contrib_df), use_container_width=True)
                 st.caption("Exact coefficient × value contribution — not an approximation.")
             else:
-                st.info("Fusion model does not expose linear coefficients.")
+                st.info("Fusion model does not expose linear coefficients; contribution breakdown unavailable.")
 
             cleanup_temp_file(temp_path)
 
         else:
             st.info("👆 Upload an image to analyze it.")
 
-    # ------------------------------------------------------------------
+    # ========================================================================
     # TAB 2: UNDERSTANDING THE METRICS
-    # ------------------------------------------------------------------
+    # ========================================================================
     with tab_explained:
         st.subheader("What do these metrics mean?")
-        st.write("""
-        ## Evidence Health Index (EHI)
-        The **EHI** is a fusion score (0–1) combining two independent real-data signals:
-        image tampering probability (ELA) and metadata anomaly score.
-        **Verdict:** EHI > 0.387 → FLAGGED; otherwise AUTHENTIC.
+        st.write("")
 
-        ## Confidence Score
-        Distance of the fusion probability from 0.5 (the uncertain midpoint).
+        st.markdown("""
+            <div class="concept-card">
+                <p class="concept-title">🧮 Evidence Health Index (EHI)</p>
+                <p class="concept-body">
+                    The <b>EHI</b> is a fusion score (0–1) combining two independent real-data signals:
+                    image tampering probability (ELA) and metadata anomaly score.
+                </p>
+                <span class="verdict-rule">Verdict: EHI &gt; 0.387 → FLAGGED · otherwise AUTHENTIC</span>
+            </div>
 
-        ## Cross-Modal Agreement Score
-        Do the image and metadata signals point the same direction?
+            <div class="concept-card">
+                <p class="concept-title">🎯 Confidence Score</p>
+                <p class="concept-body">
+                    Distance of the fusion probability from 0.5 (the uncertain midpoint).
+                    A score near 1.0 means the model is far from the decision boundary — very sure either way.
+                    A score near 0 means the case sits right on the fence and may deserve closer human review.
+                </p>
+            </div>
 
-        ## Case Priority Score
-        Triage rank — same scale as EHI, higher = investigate first.
-        """)
+            <div class="concept-card">
+                <p class="concept-title">🔗 Cross-Modal Agreement Score</p>
+                <p class="concept-body">
+                    Do the image and metadata signals point the same direction?
+                    Computed from the z-scored gap between the two signals — 1.0 means they fully agree
+                    (both flag it, or both pass it); values near 0 mean the two modalities disagree,
+                    which is itself a useful triage signal.
+                </p>
+            </div>
 
-    # ------------------------------------------------------------------
+            <div class="concept-card">
+                <p class="concept-title">🚨 Case Priority Score</p>
+                <p class="concept-body">
+                    Triage rank — same scale as EHI, higher = investigate first.
+                    Intended for sorting a queue of cases rather than judging any single one in isolation.
+                </p>
+            </div>
+        """, unsafe_allow_html=True)
+
+        st.markdown('<div class="section-divider"></div>', unsafe_allow_html=True)
+        st.subheader("🔬 How the pipeline computes them")
+
+        st.markdown("""
+            <div class="pipeline-step"><span class="pipeline-step-num">1</span><b>ELA Features (14 numbers)</b> — statistical properties of error-level residuals extracted from the uploaded image.</div>
+            <div class="pipeline-step"><span class="pipeline-step-num">2</span><b>Metadata Flags (10 numbers)</b> — presence of EXIF, editing software signatures, timestamp/camera anomalies.</div>
+            <div class="pipeline-step"><span class="pipeline-step-num">3</span><b>Image Classifier (Random Forest)</b> — trained on the 14 ELA features alone, ~79% held-out accuracy.</div>
+            <div class="pipeline-step"><span class="pipeline-step-num">4</span><b>Fusion Model (Logistic Regression)</b> — combines the image score + metadata score into the final EHI.</div>
+            <div class="pipeline-step"><span class="pipeline-step-num">5</span><b>SHAP Explanation</b> — per-image breakdown of which ELA features mattered most, plus an exact coefficient-based breakdown of the fusion step.</div>
+        """, unsafe_allow_html=True)
+
+        st.markdown('<div class="section-divider"></div>', unsafe_allow_html=True)
+        st.subheader("📈 Visualizing the pipeline")
+
+        flow_fig = go.Figure()
+        stages = ["ELA Features", "Image Classifier", "Fusion Model", "EHI"]
+        meta_stages = ["Metadata Flags", "Anomaly Score"]
+
+        x_top = [0, 1, 2, 3]
+        y_top = [1, 1, 1, 1]
+        x_bottom = [0, 1]
+        y_bottom = [0, 0]
+
+        flow_fig.add_trace(go.Scatter(x=x_top, y=y_top, mode="markers+text", text=stages,
+                                       textposition="top center", marker=dict(size=22, color="#4361ee"),
+                                       showlegend=False))
+        flow_fig.add_trace(go.Scatter(x=x_bottom, y=y_bottom, mode="markers+text", text=meta_stages,
+                                       textposition="bottom center", marker=dict(size=22, color="#f9a826"),
+                                       showlegend=False))
+        for i in range(3):
+            flow_fig.add_annotation(x=x_top[i + 1], y=1, ax=x_top[i], ay=1,
+                                     xref="x", yref="y", axref="x", ayref="y",
+                                     showarrow=True, arrowhead=3, arrowcolor="#4361ee")
+        flow_fig.add_annotation(x=2, y=1, ax=1, ay=0,
+                                 xref="x", yref="y", axref="x", ayref="y",
+                                 showarrow=True, arrowhead=3, arrowcolor="#f9a826")
+        flow_fig.add_annotation(x=1, y=0, ax=0, ay=0,
+                                 xref="x", yref="y", axref="x", ayref="y",
+                                 showarrow=True, arrowhead=3, arrowcolor="#f9a826")
+
+        flow_fig.update_layout(
+            height=280, plot_bgcolor="white",
+            xaxis=dict(visible=False, range=[-0.5, 3.5]),
+            yaxis=dict(visible=False, range=[-0.5, 1.5]),
+            margin=dict(l=10, r=10, t=20, b=10),
+        )
+        st.plotly_chart(flow_fig, use_container_width=True)
+        st.caption("Two independent signals — image (blue) and metadata (orange) — merge at the Fusion Model to produce the EHI.")
+
+    # ========================================================================
     # TAB 3: MODEL PERFORMANCE
-    # ------------------------------------------------------------------
+    # ========================================================================
     with tab_metrics:
         st.subheader("Model Performance Metrics")
-        st.caption("All metrics from internal test set (CASIA, n=465) — held out during training.")
+        st.caption("All metrics from internal test set (CASIA, n=465) — held-out validation data the model never saw during training.")
 
         rf_metrics = MODEL_METRICS["rf_classifier"]
         fusion_metrics = MODEL_METRICS["fusion_model"]
 
+        st.markdown("### 1️⃣ Image Classifier (Random Forest on ELA Features)")
         col1, col2, col3, col4 = st.columns(4)
         with col1: metric_card("Accuracy", f"{rf_metrics['accuracy']:.1%}")
         with col2: metric_card("Precision", f"{rf_metrics['precision']:.1%}")
         with col3: metric_card("Recall", f"{rf_metrics['recall']:.1%}")
         with col4: metric_card("F1 Score", f"{rf_metrics['f1']:.3f}")
 
+        col1b, col2b = st.columns(2)
+        with col1b: metric_card("ROC-AUC", f"{rf_metrics['auc']:.3f}")
+        with col2b: metric_card("Decision Threshold", f"{rf_metrics['threshold']:.3f}")
+        st.caption(f"Model trained/evaluated on {rf_metrics['n_samples']} internal test cases.")
+
+        st.markdown("### 2️⃣ Fusion Model (Image + Metadata → EHI)")
+        col1, col2, col3, col4 = st.columns(4)
+        with col1: metric_card("F1 Score", f"{fusion_metrics['f1']:.3f}")
+        with col2: metric_card("ROC-AUC", f"{fusion_metrics['auc']:.3f}")
+        with col3: metric_card("Baseline F1", f"{fusion_metrics['baseline_f1']:.3f}")
+        with col4: metric_card("Improvement", f"+{fusion_metrics['improvement_f1_percent']:.2f}%")
+
+        st.markdown("### Fusion vs. Baseline (Image Only)")
         comp_df = pd.DataFrame({
-            "Model": ["Image Only (Baseline)", "Fusion (Image+Metadata)"],
+            "Model": ["Image Only (Baseline)", "Fusion (Image + Metadata)"],
             "F1": [fusion_metrics["baseline_f1"], fusion_metrics["f1"]],
             "ROC-AUC": [fusion_metrics["baseline_auc"], fusion_metrics["auc"]],
         })
@@ -565,13 +771,18 @@ def main():
         fig_comp.update_traces(texttemplate="%{text:.3f}", textposition="outside")
         fig_comp.update_layout(height=380, plot_bgcolor="white", yaxis_range=[0, 1])
         st.plotly_chart(fig_comp, use_container_width=True)
-        st.caption("Fusion adds a modest, honest improvement over image-only baseline.")
+        st.caption("Fusion adds metadata signal to improve detection. Modest improvement is expected & honest.")
 
-    # ------------------------------------------------------------------
+    # ========================================================================
     # TAB 4: DATASET OVERVIEW
-    # ------------------------------------------------------------------
+    # ========================================================================
     with tab_dataset:
-        st.subheader("Dataset Statistics")
+        st.subheader("Dataset Statistics (3302 cases)")
+
+        col1, col2, col3 = st.columns(3)
+        with col1: metric_card("Total Cases", f"{DATASET_STATS['total_cases']:,}")
+        with col2: metric_card("Authentic", f"{DATASET_STATS['authentic']:,}")
+        with col3: metric_card("Tampered", f"{DATASET_STATS['tampered']:,}")
 
         pie_df = pd.DataFrame({
             "Label": ["Authentic", "Tampered"],
@@ -579,9 +790,10 @@ def main():
         })
         fig_pie = px.pie(pie_df, names="Label", values="Count", hole=0.5,
                           color="Label", color_discrete_map={"Authentic": "#11998e", "Tampered": "#ee5a6f"})
-        fig_pie.update_layout(height=350)
+        fig_pie.update_layout(height=350, title="Authentic vs Tampered Split")
         st.plotly_chart(fig_pie, use_container_width=True)
 
+        st.markdown("### Metric Distributions (Over Full Dataset)")
         dist_df = pd.DataFrame({
             "Metric": ["Cross-Modal Agreement", "Confidence Score", "Case Priority"],
             "Mean": [DATASET_STATS["cross_modal_agreement_mean"], DATASET_STATS["confidence_score_mean"], DATASET_STATS["case_priority_score_mean"]],
@@ -592,20 +804,26 @@ def main():
             error_y=dict(type="data", array=dist_df["Std"]),
             marker_color=["#4361ee", "#f9a826", "#ee5a6f"],
         ))
-        fig_dist.update_layout(title="Metric distributions (mean ± std, n=3302)", height=380, plot_bgcolor="white")
+        fig_dist.update_layout(title="Mean ± Std across all 3302 cases", height=380, plot_bgcolor="white")
         st.plotly_chart(fig_dist, use_container_width=True)
 
         if dataset_df is not None:
-            st.markdown("### Sample Cases")
-            st.dataframe(dataset_df.head(10), use_container_width=True, height=350)
+            st.markdown("### Sample Cases from Dataset")
+            st.dataframe(dataset_df.head(10), use_container_width=True, height=400)
+            st.caption(f"Showing first 10 of {len(dataset_df)} cases")
 
-        st.markdown("""
-        ### Data Splits
-        - **Train:** 2170 cases · **Validation:** 465 · **Internal Test:** 465 (CASIA) · **External Test:** 202 (COVERAGE)
+        st.markdown("### Data Splits")
+        st.write("""
+        - **Train:** 2170 cases (used only for model training)
+        - **Validation:** 465 cases (used for threshold tuning)
+        - **Internal Test:** 465 cases (CASIA dataset, held-out evaluation)
+        - **External Test:** 202 cases (COVERAGE dataset, different camera/compression)
+
+        *Note: Train accuracy is 100% (memorized), so we report validation/test instead.*
         """)
 
     st.markdown('<div class="section-divider"></div>', unsafe_allow_html=True)
-    st.caption("Research Paper Version · Real Data Only · Built with Streamlit + SHAP + Plotly")
+    st.caption("**Research Paper Version** · Real Data Only · No Synthetic Components in Verdict · Built with Streamlit + SHAP + Plotly")
 
 
 if __name__ == "__main__":
