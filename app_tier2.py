@@ -151,32 +151,38 @@ def select_demo_cases():
     ehi = pd.read_csv(EHI_CSV)
 
     merged = master.merge(meta, on="case_id", how="left")
-
-    # meta and ehi both have 'metadata_anomaly_score' — drop meta's copy so the
-    # merge doesn't silently rename both to _x/_y suffixes, which would make
-    # the plain column name disappear entirely.
+    
+    # Drop metadata version of metadata_anomaly_score so it doesn't silently
+    # rename to _x/_y suffix when we merge in the EHI version
     merged = merged.drop(columns=["metadata_anomaly_score"], errors="ignore")
-
+    
     merged = merged.merge(
         ehi[["case_id", "image_tamper_prob", "metadata_anomaly_score", "evidence_health_index"]],
         on="case_id", how="left"
     )
-    
+
     has_real_exif = merged["camera_model"].notna() & merged["datetime_original"].notna() & \
                     (merged["camera_model"].astype(str).str.strip() != "") & \
                     (merged["datetime_original"].astype(str).str.strip() != "")
 
     candidates = merged[has_real_exif]
 
-    auth_candidates = candidates[candidates["label"] == "authentic"] if "label" in candidates.columns \
-        else candidates[candidates["true_label"] == "authentic"] if "true_label" in candidates.columns \
-        else candidates
-    tamp_candidates = candidates[candidates["label"] != "authentic"] if "label" in candidates.columns \
-        else candidates[candidates["true_label"] == "tampered"] if "true_label" in candidates.columns \
-        else candidates
+    # Handle both label naming conventions
+    label_col = None
+    if "label" in candidates.columns:
+        label_col = "label"
+    elif "true_label" in candidates.columns:
+        label_col = "true_label"
+    
+    if label_col:
+        auth_candidates = candidates[candidates[label_col] == "authentic"]
+        tamp_candidates = candidates[candidates[label_col] == "tampered"]
+    else:
+        auth_candidates = candidates.iloc[:len(candidates)//2]
+        tamp_candidates = candidates.iloc[len(candidates)//2:]
 
     auth_case = auth_candidates.iloc[0] if len(auth_candidates) > 0 else candidates.iloc[0]
-    tamp_case = tamp_candidates.iloc[0] if len(tamp_candidates) > 0 else candidates.iloc[1]
+    tamp_case = tamp_candidates.iloc[0] if len(tamp_candidates) > 0 else candidates.iloc[1] if len(candidates) > 1 else candidates.iloc[0]
 
     return auth_case, tamp_case
 
@@ -195,8 +201,6 @@ def clean_exif_date(raw: str) -> str:
 
 # ============================================================================
 # FORCED SYNTHETIC CUSTODY GENERATION
-# (deterministic injection at a chosen event, for interactive demo control —
-#  scoring itself reuses your real graph_analyzer functions unmodified)
 # ============================================================================
 
 def fake_hash(seed: str) -> str:
@@ -339,7 +343,7 @@ def render_custody_timeline(nodes_df):
     return fig
 
 
-def render_case_panel(case_row, case_label, verdict_color_flip=False):
+def render_case_panel(case_row, case_label, case_key):
     case_id = case_row["case_id"]
     image_path = case_row["image_path"]
     real_camera = str(case_row["camera_model"]).strip()
@@ -388,12 +392,12 @@ def render_case_panel(case_row, case_label, verdict_color_flip=False):
         anomaly_choice = st.selectbox(
             "Inject custody anomaly:",
             ["none", "hash_mismatch", "timestamp_violation", "missing_custodian"],
-            key=f"custody_{case_id}",
+            key=f"custody_{case_key}",
         )
     nodes_df, custody_metrics = compute_custody_metrics(case_id, anomaly_choice)
 
     with custody_col2:
-        st.plotly_chart(render_custody_timeline(nodes_df), use_container_width=True, key=f"custody_timeline_{case_id}")
+        st.plotly_chart(render_custody_timeline(nodes_df), use_container_width=True, key=f"custody_timeline_{case_key}")
 
     cc1, cc2, cc3 = st.columns(3)
     with cc1:
@@ -413,7 +417,7 @@ def render_case_panel(case_row, case_label, verdict_color_flip=False):
         contradiction_choice = st.selectbox(
             "Inject report contradiction:",
             ["none", "camera", "date", "both"],
-            key=f"report_{case_id}",
+            key=f"report_{case_key}",
         )
     report, consistency_score = compute_report_metrics(case_id, real_camera, real_date, contradiction_choice)
 
@@ -466,10 +470,10 @@ def main():
     ])
 
     with tab_authentic:
-        auth_results = render_case_panel(auth_case, "Authentic Case")
+        auth_results = render_case_panel(auth_case, "Authentic Case", "authentic")
 
     with tab_tampered:
-        tamp_results = render_case_panel(tamp_case, "Tampered Case")
+        tamp_results = render_case_panel(tamp_case, "Tampered Case", "tampered")
 
     with tab_compare:
         st.subheader("Side-by-Side: All 5 Trust Metrics")
@@ -493,7 +497,7 @@ def main():
         fig_compare.update_traces(texttemplate="%{text:.3f}", textposition="outside")
         fig_compare.update_layout(height=420, plot_bgcolor="white", yaxis_range=[0, 1.05],
                                    xaxis_tickangle=-15)
-        st.plotly_chart(fig_compare, use_container_width=True)
+        st.plotly_chart(fig_compare, use_container_width=True, key="side_by_side_comparison")
         st.caption("Adjust the custody/report dropdowns in the case tabs above, then revisit this "
                    "chart — it updates live with your chosen anomaly/contradiction injections.")
 
