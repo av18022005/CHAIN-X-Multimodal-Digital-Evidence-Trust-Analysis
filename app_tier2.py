@@ -150,11 +150,18 @@ def select_demo_cases():
     meta = pd.read_csv(METADATA_CSV)
     ehi = pd.read_csv(EHI_CSV)
 
-    merged = master.merge(meta, on="case_id", how="left").merge(
+    merged = master.merge(meta, on="case_id", how="left")
+
+    # meta and ehi both have 'metadata_anomaly_score' — drop meta's copy so the
+    # merge doesn't silently rename both to _x/_y suffixes, which would make
+    # the plain column name disappear entirely.
+    merged = merged.drop(columns=["metadata_anomaly_score"], errors="ignore")
+
+    merged = merged.merge(
         ehi[["case_id", "image_tamper_prob", "metadata_anomaly_score", "evidence_health_index"]],
         on="case_id", how="left"
     )
-
+    
     has_real_exif = merged["camera_model"].notna() & merged["datetime_original"].notna() & \
                     (merged["camera_model"].astype(str).str.strip() != "") & \
                     (merged["datetime_original"].astype(str).str.strip() != "")
