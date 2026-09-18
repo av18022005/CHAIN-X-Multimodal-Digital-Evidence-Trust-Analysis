@@ -393,7 +393,7 @@ def render_case_panel(case_row, case_label, verdict_color_flip=False):
     nodes_df, custody_metrics = compute_custody_metrics(case_id, anomaly_choice)
 
     with custody_col2:
-        st.plotly_chart(render_custody_timeline(nodes_df), use_container_width=True)
+        st.plotly_chart(render_custody_timeline(nodes_df), use_container_width=True, key=f"custody_timeline_{case_id}")
 
     cc1, cc2, cc3 = st.columns(3)
     with cc1:
