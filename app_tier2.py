@@ -82,6 +82,22 @@ METADATA_FEATURE_NAMES = [
     "camera_make", "camera_model", "software", "datetime_original",
 ]
 
+# Identical to Tier 1's MODEL_METRICS — reproduced here for the Model
+# Performance tab. These are the same trained models (rf_final_locked_in.pkl
+# + fusion_v1.pkl), so the numbers are not re-measured for Tier 2, just
+# displayed for reference.
+MODEL_METRICS = {
+    "rf_classifier": {
+        "accuracy": 0.789, "precision": 0.795, "recall": 0.79,
+        "f1": 0.806, "auc": 0.861, "split": "internal_test (CASIA)",
+        "n_samples": 465, "threshold": 0.447,
+    },
+    "fusion_model": {
+        "f1": 0.813, "auc": 0.871, "baseline_f1": 0.806, "baseline_auc": 0.861,
+        "improvement_f1_percent": 0.87, "improvement_auc_percent": 1.16,
+    },
+}
+
 CUSTODY_ACTORS = [
     "Officer R. Malik", "Officer S. Chen", "Evidence Custodian A. Diaz",
     "Forensic Analyst K. Osei", "Forensic Analyst T. Lindqvist",
@@ -334,6 +350,23 @@ def predict_tier1_scores(rf_model, fusion_model, ela_features, metadata_features
     return float(image_tamper_prob), float(metadata_anomaly_score), float(ehi)
 
 
+def compute_confidence_agreement_priority(image_tamper_prob, metadata_anomaly_score, ehi, norm_stats):
+    """Identical formula to app_tier1.py's compute_evidence_health_index — takes
+    already-known scores and derives the same three metrics Tier 1 shows in its
+    'Confidence & Alignment Metrics' row, so the numbers match exactly for any
+    case that appears in both dashboards."""
+    image_z = (image_tamper_prob - norm_stats["image_tamper_prob"]["mean"]) / norm_stats["image_tamper_prob"]["std"]
+    metadata_z = (metadata_anomaly_score - norm_stats["metadata_anomaly_score"]["mean"]) / norm_stats["metadata_anomaly_score"]["std"]
+    disagreement = abs(image_z - metadata_z)
+    cross_modal_agreement = 1.0 / (1.0 + disagreement)
+    confidence = abs(ehi - 0.5) * 2
+    return {
+        "cross_modal_agreement_score": cross_modal_agreement,
+        "confidence_score": confidence,
+        "case_priority_score": ehi,
+    }
+
+
 def cleanup_temp_file(temp_path):
     try:
         if temp_path and os.path.exists(temp_path):
@@ -528,6 +561,21 @@ def render_case_panel(case_row, case_label, case_key):
         with m2:
             metric_card("Metadata Anomaly", f"{metadata_anomaly_score:.3f}", "🏷️")
 
+        # Same three derived metrics as Tier 1's "Confidence & Alignment
+        # Metrics" row — same formula, same normalization_stats.json.
+        _, _, _, norm_stats = load_tier1_models()
+        derived = compute_confidence_agreement_priority(
+            image_tamper_prob, metadata_anomaly_score, ehi, norm_stats
+        )
+        st.markdown("**Confidence & Alignment Metrics**")
+        d1, d2, d3 = st.columns(3)
+        with d1:
+            metric_card("Confidence", f"{derived['confidence_score']:.3f}", "🎯")
+        with d2:
+            metric_card("Cross-Modal Agreement", f"{derived['cross_modal_agreement_score']:.3f}", "🔗")
+        with d3:
+            metric_card("Case Priority", f"{derived['case_priority_score']:.3f}", "🚨")
+
     st.markdown('<div class="section-divider"></div>', unsafe_allow_html=True)
 
     # ---- Interactive synthetic layer ----
@@ -588,6 +636,9 @@ def render_case_panel(case_row, case_label, case_key):
         "image_tamper_prob": image_tamper_prob,
         "metadata_anomaly_score": metadata_anomaly_score,
         "ehi": ehi,
+        "confidence_score": derived["confidence_score"],
+        "cross_modal_agreement_score": derived["cross_modal_agreement_score"],
+        "case_priority_score": derived["case_priority_score"],
         "custody_risk_score": custody_metrics["custody_risk_score"],
         "custody_integrity_score": custody_metrics["custody_integrity_score"],
         "report_evidence_consistency": consistency_score["report_evidence_consistency"],
@@ -616,9 +667,9 @@ def main():
     with st.spinner("Selecting demo cases..."):
         auth_case, tamp_case = select_demo_cases()
 
-    tab_authentic, tab_tampered, tab_upload, tab_compare, tab_about = st.tabs([
+    tab_authentic, tab_tampered, tab_upload, tab_compare, tab_modelperf, tab_about = st.tabs([
         "🟢  Authentic Case", "🔴  Tampered Case", "📤  Upload Your Own",
-        "⚖️  Side-by-Side", "ℹ️  About This Demo",
+        "⚖️  Side-by-Side", "🎯  Model Performance", "ℹ️  About This Demo",
     ])
 
     with tab_authentic:
@@ -690,8 +741,39 @@ def main():
         st.caption("Adjust the custody/report dropdowns in the case tabs above, then revisit this "
                    "chart — it updates live with your chosen anomaly/contradiction injections.")
 
+        st.caption("For model performance numbers, see the Model Performance tab.")
+
+    with tab_modelperf:
+        st.subheader("Image + Fusion Model Performance")
+        st.caption("Identical to Tier 1 — Tier 2 reuses the exact same trained models "
+                   "(rf_final_locked_in.pkl + fusion_v1.pkl) without modification, so these "
+                   "numbers are reproduced here for reference, not re-measured.")
+
+        st.markdown("### 1️⃣ Image Classifier (Random Forest on ELA Features)")
+        rf_metrics = MODEL_METRICS["rf_classifier"]
+        col1, col2, col3, col4 = st.columns(4)
+        with col1: metric_card("Accuracy", f"{rf_metrics['accuracy']:.1%}")
+        with col2: metric_card("Precision", f"{rf_metrics['precision']:.1%}")
+        with col3: metric_card("Recall", f"{rf_metrics['recall']:.1%}")
+        with col4: metric_card("F1 Score", f"{rf_metrics['f1']:.3f}")
+        col1b, col2b = st.columns(2)
+        with col1b: metric_card("ROC-AUC", f"{rf_metrics['auc']:.3f}")
+        with col2b: metric_card("Decision Threshold", f"{rf_metrics['threshold']:.3f}")
+        st.caption(f"Evaluated on {rf_metrics['n_samples']} internal test cases ({rf_metrics['split']}).")
+
+        st.markdown("### 2️⃣ Fusion Model (Image + Metadata → EHI)")
+        fusion_metrics = MODEL_METRICS["fusion_model"]
+        col1, col2, col3, col4 = st.columns(4)
+        with col1: metric_card("F1 Score", f"{fusion_metrics['f1']:.3f}")
+        with col2: metric_card("ROC-AUC", f"{fusion_metrics['auc']:.3f}")
+        with col3: metric_card("Baseline (Image Only)", f"F1: {fusion_metrics['baseline_f1']:.3f}")
+        with col4: metric_card("Improvement", f"+{fusion_metrics['improvement_f1_percent']:.2f}% (F1)")
+
         st.markdown('<div class="section-divider"></div>', unsafe_allow_html=True)
-        st.subheader("Detection Performance (validated on full 3302-case dataset)")
+        st.subheader("Synthetic Layer Detection Performance (validated on full 3302-case dataset)")
+        st.caption("These evaluate the custody/report anomaly-scoring LOGIC against controlled, "
+                   "injected ground truth — not real-world detection accuracy, since no real "
+                   "custody or report data exists for CASIA.")
         col1, col2 = st.columns(2)
         with col1:
             st.markdown("**🔗 Custody Anomaly Detection**")
