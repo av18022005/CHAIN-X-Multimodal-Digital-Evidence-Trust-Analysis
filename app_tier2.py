@@ -3,9 +3,11 @@ TIER 2 STREAMLIT DASHBOARD: Evidence Health Index — Proof-of-Concept Demo
 CHAIN-X — Multimodal Digital Evidence Trust Analysis
 
 Shows: "what if we had custody + NLP report data?" — one fixed authentic
-case and one fixed tampered case, both with real EXIF ground truth, with
-interactive toggles to inject synthetic custody anomalies / report
-contradictions and watch the two synthetic-only trust metrics respond live.
+case and one fixed tampered case (both with real EXIF ground truth, and
+now chosen so the model's own verdict agrees with the label), plus an
+"Upload Your Own" tab that runs the real Tier 1 pipeline live. Interactive
+toggles inject synthetic custody anomalies / report contradictions and
+watch the two synthetic-only trust metrics respond live.
 
 IMPORTANT: per project rules, this file is removed before paper submission.
 Only app_tier1.py (real data only) goes in the paper.
@@ -20,6 +22,8 @@ Dependencies:
 
 import os
 import sys
+import json
+import pickle
 import random
 import hashlib
 from pathlib import Path
@@ -42,6 +46,13 @@ sys.path.insert(0, str(REPO_ROOT))
 from src.custody.graph_analyzer import build_case_graph, analyze_case_graph
 from src.nlp.consistency import score_row as consistency_score_row
 
+# Same real Tier 1 pipeline, reused so the "Upload Your Own" tab produces
+# genuinely computed image_tamper_prob / metadata_anomaly_score / EHI
+# instead of anything synthetic.
+from src.image.ela import extract_all_features as extract_ela_features
+from src.metadata.extractor import extract_all_metadata
+from src.metadata.anomaly import analyze as analyze_metadata
+
 # ============================================================================
 # CONFIGURATION
 # ============================================================================
@@ -51,6 +62,25 @@ st.set_page_config(page_title="ChainX — Tier 2 POC Demo", layout="wide", page_
 MASTER_CSV = "/kaggle/working/data/master_index.csv"
 METADATA_CSV = "/kaggle/working/features/metadata_features.csv"
 EHI_CSV = "/kaggle/working/features/evidence_health_index.csv"
+
+# Tier 1 models — needed here only for the "Upload Your Own" tab, so a
+# fresh upload gets a real image_tamper_prob / metadata_anomaly_score / EHI
+# instead of nothing.
+MODEL_RF_PATH = "models/rf_final_locked_in.pkl"
+MODEL_FUSION_PATH = "models/fusion_v1.pkl"
+NORM_STATS_PATH = "/kaggle/working/normalization_stats.json"
+
+ELA_FEATURE_NAMES = [
+    "ela_mean", "ela_std", "ela_max", "ela_p95", "ela_high_energy_ratio",
+    "laplacian_var", "local_noise_std_mean", "local_noise_std_std", "edge_density",
+    "patch_ela_mean_of_means", "patch_ela_std_of_means", "patch_ela_max_zscore",
+    "patch_ela_max_minus_median", "patch_edge_std_of_means",
+]
+METADATA_FEATURE_NAMES = [
+    "flag_exif_missing", "flag_editing_software", "flag_implausible_timestamp",
+    "flag_no_camera_info", "metadata_anomaly_score", "exif_present",
+    "camera_make", "camera_model", "software", "datetime_original",
+]
 
 CUSTODY_ACTORS = [
     "Officer R. Malik", "Officer S. Chen", "Evidence Custodian A. Diaz",
@@ -65,6 +95,12 @@ CUSTODY_ROLES_SEQUENCE = [
     ("report_filed", "Case Reviewer"),
 ]
 FORCED_ANOMALY_EVENT_IDX = 2  # lab_handoff — deterministic placement for demo reproducibility
+# NOTE: this index (and therefore which role gets flagged) is intentionally
+# fixed regardless of case — see the "About This Demo" tab. The custody
+# risk score for a given anomaly TYPE is also fixed by graph_analyzer.py's
+# rule-based scoring, not derived per-case — this is why "missing_custodian"
+# gives the same Custody Risk Score / flagged role on every case you try.
+# That's expected behavior, not a bug in this file.
 
 CAMERA_POOL = [
     "Canon EOS 5D", "Canon EOS 5D Mark II", "Canon PowerShot G12",
@@ -142,20 +178,27 @@ CUSTOM_CSS = """
 
 @st.cache_data
 def select_demo_cases():
-    """Pick the first authentic and first tampered case that both have
-    real EXIF ground truth (camera_model + datetime_original present),
-    since contradiction injection is only meaningful with real ground truth
-    to contradict."""
+    """Pick an authentic and a tampered case that both have real EXIF ground
+    truth (camera_model + datetime_original present), since contradiction
+    injection is only meaningful with real ground truth to contradict.
+
+    Among the eligible cases, prefer ones where the model's own verdict
+    AGREES with the ground-truth label — otherwise the fixed demo can
+    accidentally showcase a misclassification (an authentic case that gets
+    flagged, or a tampered case scored as authentic), which is confusing to
+    present. Falls back to the full candidate pool if no agreeing case
+    exists for a given label.
+    """
     master = pd.read_csv(MASTER_CSV)
     meta = pd.read_csv(METADATA_CSV)
     ehi = pd.read_csv(EHI_CSV)
 
     merged = master.merge(meta, on="case_id", how="left")
-    
+
     # Drop metadata version of metadata_anomaly_score so it doesn't silently
     # rename to _x/_y suffix when we merge in the EHI version
     merged = merged.drop(columns=["metadata_anomaly_score"], errors="ignore")
-    
+
     merged = merged.merge(
         ehi[["case_id", "image_tamper_prob", "metadata_anomaly_score", "evidence_health_index"]],
         on="case_id", how="left"
@@ -167,22 +210,46 @@ def select_demo_cases():
 
     candidates = merged[has_real_exif]
 
-    # Handle both label naming conventions
+    # Handle both label naming conventions, and both string ("authentic"/
+    # "tampered") and numeric (0/1) label encodings.
     label_col = None
     if "label" in candidates.columns:
         label_col = "label"
     elif "true_label" in candidates.columns:
         label_col = "true_label"
-    
-    if label_col:
-        auth_candidates = candidates[candidates[label_col] == "authentic"]
-        tamp_candidates = candidates[candidates[label_col] == "tampered"]
-    else:
-        auth_candidates = candidates.iloc[:len(candidates)//2]
-        tamp_candidates = candidates.iloc[len(candidates)//2:]
 
-    auth_case = auth_candidates.iloc[0] if len(auth_candidates) > 0 else candidates.iloc[0]
-    tamp_case = tamp_candidates.iloc[0] if len(tamp_candidates) > 0 else candidates.iloc[1] if len(candidates) > 1 else candidates.iloc[0]
+    if label_col:
+        label_series = candidates[label_col]
+        if label_series.dtype == object:
+            normalized = label_series.astype(str).str.lower()
+            auth_candidates = candidates[normalized.isin(["authentic", "au", "0"])]
+            tamp_candidates = candidates[normalized.isin(["tampered", "tp", "1"])]
+        else:
+            auth_candidates = candidates[label_series == 0]
+            tamp_candidates = candidates[label_series == 1]
+    else:
+        auth_candidates = candidates.iloc[:len(candidates) // 2]
+        tamp_candidates = candidates.iloc[len(candidates) // 2:]
+
+    FUSION_THRESHOLD = 0.387  # keep in sync with the threshold used in render_case_panel
+
+    # Prefer cases the model gets right; among those, the most confidently
+    # correct one makes for the cleanest demo.
+    auth_agree = auth_candidates[auth_candidates["evidence_health_index"] < FUSION_THRESHOLD]
+    tamp_agree = tamp_candidates[tamp_candidates["evidence_health_index"] > FUSION_THRESHOLD]
+
+    auth_pool = auth_agree if len(auth_agree) > 0 else auth_candidates
+    tamp_pool = tamp_agree if len(tamp_agree) > 0 else tamp_candidates
+
+    if len(auth_pool) > 0:
+        auth_case = auth_pool.sort_values("evidence_health_index").iloc[0]
+    else:
+        auth_case = candidates.iloc[0]
+
+    if len(tamp_pool) > 0:
+        tamp_case = tamp_pool.sort_values("evidence_health_index", ascending=False).iloc[0]
+    else:
+        tamp_case = candidates.iloc[1] if len(candidates) > 1 else candidates.iloc[0]
 
     return auth_case, tamp_case
 
@@ -197,6 +264,77 @@ def clean_exif_date(raw: str) -> str:
         return date_part
     except ValueError:
         return ""
+
+
+# ============================================================================
+# "UPLOAD YOUR OWN" — runs the real Tier 1 pipeline on a fresh image
+# ============================================================================
+
+@st.cache_resource
+def load_tier1_models():
+    with open(MODEL_RF_PATH, "rb") as f:
+        rf_data = pickle.load(f)
+    rf_model = rf_data["model"]
+
+    with open(MODEL_FUSION_PATH, "rb") as f:
+        fusion_data = pickle.load(f)
+    fusion_model = fusion_data["model"]
+    fusion_threshold = fusion_data["threshold"]
+
+    with open(NORM_STATS_PATH, "r") as f:
+        norm_stats = json.load(f)
+
+    return rf_model, fusion_model, fusion_threshold, norm_stats
+
+
+def process_uploaded_image(image_file):
+    """Same extraction as Tier 1: save to a temp path, pull ELA + metadata."""
+    temp_path = f"/tmp/tier2_upload_{image_file.name}"
+    with open(temp_path, "wb") as f:
+        f.write(image_file.getbuffer())
+
+    ela_result = extract_ela_features(temp_path)
+    ela_features = {col: ela_result[col] for col in ELA_FEATURE_NAMES}
+
+    metadata_raw = extract_all_metadata(temp_path)
+    metadata_analyzed = analyze_metadata(metadata_raw)
+
+    metadata_features = {}
+    for col in METADATA_FEATURE_NAMES:
+        if col in metadata_analyzed:
+            metadata_features[col] = metadata_analyzed[col]
+        elif col in metadata_raw:
+            metadata_features[col] = metadata_raw[col]
+        else:
+            metadata_features[col] = None
+
+    return {
+        "ela_features": ela_features,
+        "metadata_features": metadata_features,
+        "metadata_raw": metadata_raw,
+        "temp_path": temp_path,
+    }
+
+
+def predict_tier1_scores(rf_model, fusion_model, ela_features, metadata_features):
+    """Real image_tamper_prob / metadata_anomaly_score / EHI — identical math to app_tier1.py."""
+    X_img = np.array([[ela_features[c] for c in ELA_FEATURE_NAMES]])
+    image_tamper_prob = rf_model.predict_proba(X_img)[0][1]
+
+    metadata_anomaly_score = metadata_features.get("metadata_anomaly_score", 0.5)
+
+    X_fusion = np.array([[image_tamper_prob, metadata_anomaly_score]])
+    ehi = fusion_model.predict_proba(X_fusion)[0][1]
+
+    return float(image_tamper_prob), float(metadata_anomaly_score), float(ehi)
+
+
+def cleanup_temp_file(temp_path):
+    try:
+        if temp_path and os.path.exists(temp_path):
+            os.remove(temp_path)
+    except OSError:
+        pass
 
 
 # ============================================================================
@@ -408,6 +546,12 @@ def render_case_panel(case_row, case_label, case_key):
         flag_text = "YES" if custody_metrics["flagged_custody_anomaly"] else "NO"
         metric_card("Flagged Anomalous?", flag_text, "🚩")
 
+    if anomaly_choice != "none":
+        st.caption(
+            "This anomaly's score and flagged role are fixed by anomaly TYPE (rule-based scoring, "
+            "same on every case) — not derived from this specific case. See the About tab."
+        )
+
     st.markdown('<div class="section-divider"></div>', unsafe_allow_html=True)
 
     # ---- Interactive synthetic report ----
@@ -465,8 +609,9 @@ def main():
     with st.spinner("Selecting demo cases..."):
         auth_case, tamp_case = select_demo_cases()
 
-    tab_authentic, tab_tampered, tab_compare, tab_about = st.tabs([
-        "🟢  Authentic Case", "🔴  Tampered Case", "⚖️  Side-by-Side", "ℹ️  About This Demo",
+    tab_authentic, tab_tampered, tab_upload, tab_compare, tab_about = st.tabs([
+        "🟢  Authentic Case", "🔴  Tampered Case", "📤  Upload Your Own",
+        "⚖️  Side-by-Side", "ℹ️  About This Demo",
     ])
 
     with tab_authentic:
@@ -474,6 +619,43 @@ def main():
 
     with tab_tampered:
         tamp_results = render_case_panel(tamp_case, "Tampered Case", "tampered")
+
+    with tab_upload:
+        st.subheader("Upload an image to run the full pipeline")
+        st.caption(
+            "Image tamper probability, metadata anomaly score and EHI below are computed live from "
+            "your upload using the real Tier 1 models. The chain of custody and forensic report are "
+            "still generated synthetically — an uploaded image has no real case file to draw either from."
+        )
+        uploaded_file = st.file_uploader(
+            "Choose an image (JPG, PNG)", type=["jpg", "jpeg", "png"], key="tier2_uploader"
+        )
+        if uploaded_file:
+            with st.spinner("Running the Tier 1 pipeline on your upload..."):
+                rf_model, fusion_model, fusion_threshold, norm_stats = load_tier1_models()
+                proc = process_uploaded_image(uploaded_file)
+                image_tamper_prob, metadata_anomaly_score, ehi = predict_tier1_scores(
+                    rf_model, fusion_model, proc["ela_features"], proc["metadata_features"]
+                )
+
+            camera_model = proc["metadata_raw"].get("Make") or proc["metadata_raw"].get("Model") or "Unknown"
+            datetime_original = proc["metadata_raw"].get("DateTimeOriginal", "")
+            upload_case_id = f"upload_{uploaded_file.name}"
+
+            fake_case_row = pd.Series({
+                "case_id": upload_case_id,
+                "image_path": proc["temp_path"],
+                "camera_model": camera_model,
+                "datetime_original": datetime_original,
+                "image_tamper_prob": image_tamper_prob,
+                "metadata_anomaly_score": metadata_anomaly_score,
+                "evidence_health_index": ehi,
+            })
+
+            render_case_panel(fake_case_row, "Uploaded Case", "uploaded")
+            cleanup_temp_file(proc["temp_path"])
+        else:
+            st.info("👆 Upload an image to see the full pipeline — real detection + synthetic custody/report — run on it.")
 
     with tab_compare:
         st.subheader("Side-by-Side: All 5 Trust Metrics")
@@ -556,10 +738,20 @@ def main():
         - **Custody anomaly dropdown**: regenerates a synthetic 5-event custody chain for the selected
           case, optionally injecting a hash break, timestamp violation, or missing custodian at a fixed
           point in the chain, then scores it with the *exact same* `graph_analyzer.py` logic used to
-          validate detection across all 3302 cases.
+          validate detection across all 3302 cases. Because the injection point and the rule-based
+          scoring are fixed **per anomaly type**, the resulting risk score and flagged role are the same
+          regardless of which case you're viewing — this demonstrates the detection logic working
+          correctly against known, injected ground truth, not case-specific severity.
         - **Report contradiction dropdown**: regenerates a synthetic forensic report claiming a camera
           and date, optionally corrupting one or both against the case's real EXIF ground truth, then
           scores it with the *exact same* `consistency.py` logic from Phase 4.
+
+        ### Upload Your Own tab
+
+        Runs the real, trained Tier 1 models (`rf_final_locked_in.pkl` + `fusion_v1.pkl`) on whatever
+        image you upload — the image tamper probability, metadata anomaly score and EHI shown there are
+        genuinely computed, not synthetic. The chain of custody and forensic report are generated fresh
+        for the upload, since it has no real case file to draw either from.
         """)
 
 
