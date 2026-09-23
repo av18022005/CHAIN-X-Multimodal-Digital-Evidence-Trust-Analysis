@@ -94,13 +94,18 @@ CUSTODY_ROLES_SEQUENCE = [
     ("analysis", "Forensic Analyst"),
     ("report_filed", "Case Reviewer"),
 ]
-FORCED_ANOMALY_EVENT_IDX = 2  # lab_handoff — deterministic placement for demo reproducibility
-# NOTE: this index (and therefore which role gets flagged) is intentionally
-# fixed regardless of case — see the "About This Demo" tab. The custody
-# risk score for a given anomaly TYPE is also fixed by graph_analyzer.py's
-# rule-based scoring, not derived per-case — this is why "missing_custodian"
-# gives the same Custody Risk Score / flagged role on every case you try.
-# That's expected behavior, not a bug in this file.
+ANOMALY_EVENT_IDX_BY_TYPE = {
+    "missing_custodian": 1,    # intake_storage — Evidence Custodian
+    "hash_mismatch": 2,        # lab_handoff — Forensic Analyst
+    "timestamp_violation": 4,  # report_filed — Case Reviewer
+}
+# NOTE: each anomaly TYPE has its own fixed position (so the dropdown visibly
+# highlights a different node per type), but the position for a given type is
+# intentionally fixed regardless of CASE — see the "About This Demo" tab. The
+# custody risk score for a given anomaly TYPE is likewise fixed by
+# graph_analyzer.py's rule-based scoring, not derived per-case — this is why
+# "missing_custodian" gives the same Custody Risk Score / flagged role on
+# every case you try. That's expected behavior, not a bug in this file.
 
 CAMERA_POOL = [
     "Canon EOS 5D", "Canon EOS 5D Mark II", "Canon PowerShot G12",
@@ -357,10 +362,12 @@ def generate_case_graph_forced(case_id: str, anomaly_choice: str, seed: int = 42
     current_hash = real_hash
     parent_event_id = None
 
+    target_idx = ANOMALY_EVENT_IDX_BY_TYPE.get(anomaly_choice)
+
     for idx, (action, role) in enumerate(CUSTODY_ROLES_SEQUENCE):
         event_id = f"{case_id}_ev{idx}"
         actor = rng.choice(CUSTODY_ACTORS)
-        is_anomalous_event = (idx == FORCED_ANOMALY_EVENT_IDX) and (anomaly_choice != "none")
+        is_anomalous_event = (target_idx is not None) and (idx == target_idx)
 
         current_time = current_time + timedelta(hours=rng.randint(2, 72))
         this_timestamp = current_time
@@ -736,12 +743,16 @@ def main():
         ### How the interactive toggles work
 
         - **Custody anomaly dropdown**: regenerates a synthetic 5-event custody chain for the selected
-          case, optionally injecting a hash break, timestamp violation, or missing custodian at a fixed
-          point in the chain, then scores it with the *exact same* `graph_analyzer.py` logic used to
+          case, optionally injecting a hash break (at the lab handoff), a timestamp violation (at the
+          report filing), or a missing custodian (at intake) — each anomaly type has its own fixed
+          position in the chain, then scores it with the *exact same* `graph_analyzer.py` logic used to
           validate detection across all 3302 cases. Because the injection point and the rule-based
           scoring are fixed **per anomaly type**, the resulting risk score and flagged role are the same
           regardless of which case you're viewing — this demonstrates the detection logic working
-          correctly against known, injected ground truth, not case-specific severity.
+          correctly against known, injected ground truth, not case-specific severity. Custody integrity
+          is also independent of the image's own tamper verdict by design: it's a separate trust
+          signal about the evidence's handling trail, not about the image content itself — that's why
+          "none" looks identical on both the authentic and tampered case until you inject an anomaly.
         - **Report contradiction dropdown**: regenerates a synthetic forensic report claiming a camera
           and date, optionally corrupting one or both against the case's real EXIF ground truth, then
           scores it with the *exact same* `consistency.py` logic from Phase 4.
