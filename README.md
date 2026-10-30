@@ -23,6 +23,9 @@ It analyzes images, videos, reports, metadata and custody records together, dete
 
 Explanations use SHAP attribution and are shown on a Streamlit dashboard.
 
+<img width="1374" height="604" alt="23MIA1036, 23MIA1130 (Arista Vania, Tannya Pasricha)" src="https://github.com/user-attachments/assets/f4c4f6ac-c1e3-4306-a578-9639635b0531" />
+
+
 ![CHAIN-X architecture](docs/figures/fig_arch.png)
 
 ## Project status (honest summary)
