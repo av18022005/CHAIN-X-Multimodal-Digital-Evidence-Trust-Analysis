@@ -28,17 +28,6 @@ Explanations use SHAP attribution and are shown on a Streamlit dashboard.
 
 ![CHAIN-X architecture](docs/figures/fig_arch.png)
 
-## Project status (honest summary)
-
-| Component | Status |
-|---|---|
-| Image localization study (ELA + SRM, ResNet-18 U-Net, CASIA v2.0) | Implemented and evaluated (see `notebooks/`) |
-| Evidence-survival experiments (JPEG, resize, blur, repeated transforms) | Implemented and evaluated |
-| Image features for fusion (ELA, frozen EfficientNet-B0, RF/XGBoost) | Code in `src/image/` (update this row with your actual run results) |
-| Metadata, NLP, graph engines, cross-modal check | Update with your actual status |
-| Fusion (attention-gated MLP), EHI, CRS, SHAP, dashboard | Update with your actual status |
-| Synthetic custody benchmark (2,000 cases) | Planned |
-| Physical screen recapture, external dataset (IMD2020) | Not run; no results claimed |
 
 ## Key results so far (image engine, CASIA v2.0, 500-image source-disjoint test set)
 
