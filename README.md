@@ -1,7 +1,11 @@
-# SCREEN-TRACE
-### Screen-Laundering-Aware Image Forgery Localization and Evidence Survival
+# CHAIN-X: A Unified Multimodal Framework for Chain-of-Custody Evidence Trust Analysis
 
-**SCREEN-TRACE** is an image-forensics research project that investigates the reliability of image forgery detection and localization after an image undergoes digital degradation or physical screen recapture.
+Developed as part of the course on "Forensic Analytics" at Vellore Institute of Technology, Chennai.
+by "Arista Vania", "Tannya Pasricha"
+
+Subject Code: CSE4074
+Semester: Fall 2026-27
+Professor: Dr. S. Johanan Joysingh
 
 Traditional image-forensics approaches primarily analyse original digital image files. However, manipulated images can be displayed on a laptop or mobile screen, photographed using another device, compressed, resized, and redistributed. These processes can introduce distortions that weaken or obscure traces of image manipulation.
 
@@ -288,10 +292,3 @@ The project contributes to the broader objective of supporting information integ
 
 ---
 
-## Team
-
-Add project contributors and institutional details here.
-
-**Institution:** Vellore Institute of Technology, Chennai
-
-**Course:** CSE4076 – Image and Video Analytics
