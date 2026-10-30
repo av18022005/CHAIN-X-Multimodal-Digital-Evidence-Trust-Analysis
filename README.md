@@ -268,6 +268,75 @@ SCREEN-TRACE/
 *Note: The structure represents the proposed repository organization and should be updated to match the final implementation.*
 
 ---
+Experimental Results
+
+Image-Level Detection Results
+
+The image-level detection model was evaluated on authentic and manipulated images to assess its ability to distinguish between the two categories.
+
+Performance Metrics
+
+Metric
+
+Score
+
+ROC-AUC
+
+0.9315
+
+Accuracy
+
+84.6%
+
+Balanced Accuracy
+
+84.6%
+
+Precision
+
+81.68%
+
+Recall
+
+89.2%
+
+F1-score
+
+85.28%
+
+Confusion Matrix
+
+Actual / Predicted
+
+Authentic
+
+Manipulated
+
+Authentic
+
+200
+
+50
+
+Manipulated
+
+27
+
+223
+
+Results Interpretation
+
+ROC-AUC (0.9315): Indicates strong discrimination between authentic and manipulated images across classification thresholds.
+
+Accuracy (84.6%): The model correctly classified 84.6% of the evaluated images.
+
+Precision (81.68%): Of the images predicted as manipulated, 81.68% were actually manipulated.
+
+Recall (89.2%): The model successfully identified 89.2% of the actual manipulated images.
+
+F1-score (85.28%): Demonstrates a balance between precision and recall.
+
+The results indicate that the model identifies manipulated images with relatively high recall, making it useful for preliminary forensic screening. However, false positives and false negatives remain, highlighting the need for further validation and complementary localization analysis.
 
 ## Limitations
 
